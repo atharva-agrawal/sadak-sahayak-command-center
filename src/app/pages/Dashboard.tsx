@@ -19,59 +19,47 @@ import {
 import { MapWidget } from "../components/MapWidget";
 import { LiveFeed } from "../components/LiveFeed";
 import { AiInsights } from "../components/AiInsights";
-import { Shield, Users, IndianRupee, Activity } from "lucide-react";
+import { Shield, Users, Activity } from "lucide-react";
 
 export function Dashboard() {
   const navigate = useNavigate();
 
   return (
     <div className="space-y-6 pb-10">
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard 
-          title="Today's Cases" 
-          value="1,245" 
-          trend="+12%" 
-          trendUp={true} 
-          icon={<Shield className="w-5 h-5 text-blue-400" />} 
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <KpiCard
+          title="Today's Cases"
+          value="1,245"
+          trend="+12%"
+          trendUp={true}
+          icon={<Shield className="w-5 h-5 text-blue-400" />}
           color="from-blue-600/20 to-indigo-600/5"
           borderColor="border-blue-500/20"
           onClick={() => navigate("/cases")}
         />
-        <KpiCard 
-          title="Pending Actions" 
-          value="342" 
-          trend="-5%" 
-          trendUp={false} 
-          icon={<Activity className="w-5 h-5 text-amber-400" />} 
+        <KpiCard
+          title="Pending Actions"
+          value="342"
+          trend="-5%"
+          trendUp={false}
+          icon={<Activity className="w-5 h-5 text-amber-400" />}
           color="from-amber-600/20 to-orange-600/5"
           borderColor="border-amber-500/20"
           onClick={() => navigate("/cases")}
         />
-        <KpiCard 
-          title="Daily Revenue" 
-          value="₹2.1L" 
-          trend="+8%" 
-          trendUp={true} 
-          icon={<IndianRupee className="w-5 h-5 text-emerald-400" />} 
-          color="from-emerald-600/20 to-teal-600/5"
-          borderColor="border-emerald-500/20"
-        />
-        <KpiCard 
-          title="Active Officers" 
-          value="89" 
-          trend="Stable" 
-          trendUp={true} 
-          icon={<Users className="w-5 h-5 text-purple-400" />} 
+        <KpiCard
+          title="Active Officers"
+          value="89"
+          trend="Stable"
+          trendUp={true}
+          icon={<Users className="w-5 h-5 text-purple-400" />}
           color="from-purple-600/20 to-pink-600/5"
           borderColor="border-purple-500/20"
           onClick={() => navigate("/cases")}
         />
       </div>
 
-      {/* Map & Live Feed Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[450px]">
-        {/* State Map (Chhattisgarh abstraction) */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 h-[450px]">
         <div className="lg:col-span-2 bg-white/60 dark:bg-[#0A1222]/60 backdrop-blur-md rounded-2xl border border-slate-200 dark:border-indigo-500/10 shadow-lg flex flex-col overflow-hidden">
           <div className="p-5 border-b border-slate-200 dark:border-indigo-500/10 flex justify-between items-center bg-slate-50/40 dark:bg-[#050B14]/40">
             <div>
@@ -88,15 +76,12 @@ export function Dashboard() {
           </div>
         </div>
 
-        {/* Live Feed */}
         <div className="lg:col-span-1">
           <LiveFeed />
         </div>
       </div>
 
-      {/* Analytics Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 auto-rows-[350px]">
-        {/* Trend Area Chart */}
         <div className="lg:col-span-1 bg-white/60 dark:bg-[#0A1222]/60 backdrop-blur-md rounded-2xl p-5 border border-slate-200 dark:border-indigo-500/10 shadow-lg flex flex-col min-h-[300px]">
           <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100 uppercase tracking-wider mb-4">7-Day Case Volume</h3>
           <div className="flex-1 min-h-0 w-full">
@@ -104,8 +89,8 @@ export function Dashboard() {
               <AreaChart data={weeklyChallansData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorCases" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" strokeOpacity={0.5} vertical={false} className="dark:stroke-[#1e293b]" />
@@ -121,7 +106,6 @@ export function Dashboard() {
           </div>
         </div>
 
-        {/* Violation Distribution Donut */}
         <div className="lg:col-span-1 bg-white/60 dark:bg-[#0A1222]/60 backdrop-blur-md rounded-2xl p-5 border border-slate-200 dark:border-indigo-500/10 shadow-lg flex flex-col min-h-[300px]">
           <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100 uppercase tracking-wider mb-2">Violation Breakdown</h3>
           <div className="flex-1 min-h-0 flex flex-col items-center justify-center relative w-full">
@@ -141,24 +125,22 @@ export function Dashboard() {
                     <Cell key={`pie-cell-${index}`} fill={entry.color} />
                   ))}
                 </Pie>
-                <Tooltip 
+                <Tooltip
                   contentStyle={{ backgroundColor: "var(--color-bg, #ffffff)", border: "1px solid rgba(99,102,241,0.2)", borderRadius: "12px", color: "var(--color-text, #1e293b)" }}
                   itemStyle={{ color: "#3b82f6" }}
                 />
               </PieChart>
             </ResponsiveContainer>
-            
-            {/* Center Text */}
+
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
               <span className="text-2xl font-bold text-slate-800 dark:text-slate-100">1.2k</span>
               <span className="text-[10px] text-slate-500 dark:text-slate-400">Total Cases</span>
             </div>
-            
-            {/* Compact Legend */}
+
             <div className="absolute bottom-0 flex flex-wrap justify-center gap-2 mt-2 w-full px-2">
               {violationDistributionData.slice(0, 3).map((entry, index) => (
                 <div key={`legend-${index}`} className="flex items-center text-[10px] text-slate-600 dark:text-slate-300">
-                  <div className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: entry.color }}></div>
+                  <div className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: entry.color }} />
                   {entry.name}
                 </div>
               ))}
@@ -166,7 +148,6 @@ export function Dashboard() {
           </div>
         </div>
 
-        {/* AI Insights */}
         <div className="lg:col-span-1">
           <AiInsights />
         </div>
@@ -188,24 +169,28 @@ type KpiCardProps = {
 
 function KpiCard({ title, value, trend, trendUp, icon, color, borderColor, onClick }: KpiCardProps) {
   return (
-    <motion.div 
+    <motion.div
       whileHover={{ y: -5 }}
       onClick={onClick}
       className={`bg-gradient-to-br ${color} bg-white/80 dark:bg-[#0A1222]/80 backdrop-blur-xl rounded-2xl p-5 border border-slate-200 dark:${borderColor} shadow-lg relative overflow-hidden group ${onClick ? "cursor-pointer" : ""}`}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
-      onKeyDown={onClick ? (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onClick();
-        }
-      } : undefined}
+      onKeyDown={
+        onClick
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
     >
       <div className="flex justify-between items-start mb-4">
         <div className="p-2 rounded-xl bg-slate-50 dark:bg-[#050B14]/50 border border-slate-200 dark:border-slate-700/50 group-hover:scale-110 transition-transform">
           {icon}
         </div>
-        <div className={`text-xs font-semibold px-2 py-1 rounded-full ${trendUp ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400' : 'bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400'}`}>
+        <div className={`text-xs font-semibold px-2 py-1 rounded-full ${trendUp ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400" : "bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400"}`}>
           {trend}
         </div>
       </div>
