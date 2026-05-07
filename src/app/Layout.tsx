@@ -2,7 +2,6 @@ import { NavLink, Outlet, useLocation } from "react-router";
 import { 
   LayoutDashboard, 
   FileText, 
-  TrendingUp, 
   ShieldAlert, 
   Settings, 
   LogOut, 
@@ -18,7 +17,7 @@ import { motion, AnimatePresence } from "motion/react";
 
 export function Layout() {
   const [profileOpen, setProfileOpen] = useState(false);
-  const [isDark, setIsDark] = useState(true);
+  const [isDark, setIsDark] = useState(false);
   const location = useLocation();
 
   useEffect(() => {
@@ -52,7 +51,6 @@ export function Layout() {
         <div className="flex-1 flex flex-col gap-4 w-full px-3">
           <NavItem to="/" icon={<LayoutDashboard />} label="Dashboard" />
           <NavItem to="/cases" icon={<FileText />} label="Cases" />
-          <NavItem to="/revenue" icon={<TrendingUp />} label="Revenue" />
         </div>
 
         <div className="mt-auto w-full px-3 flex flex-col gap-4">
