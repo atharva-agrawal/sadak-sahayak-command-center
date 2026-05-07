@@ -11,6 +11,7 @@ import {
   Cell,
 } from "recharts";
 import { motion } from "motion/react";
+import { useNavigate } from "react-router";
 import {
   weeklyChallansData,
   violationDistributionData,
@@ -21,6 +22,8 @@ import { AiInsights } from "../components/AiInsights";
 import { Shield, Users, IndianRupee, Activity } from "lucide-react";
 
 export function Dashboard() {
+  const navigate = useNavigate();
+
   return (
     <div className="space-y-6 pb-10">
       {/* KPI Cards */}
@@ -33,6 +36,7 @@ export function Dashboard() {
           icon={<Shield className="w-5 h-5 text-blue-400" />} 
           color="from-blue-600/20 to-indigo-600/5"
           borderColor="border-blue-500/20"
+          onClick={() => navigate("/cases")}
         />
         <KpiCard 
           title="Pending Actions" 
@@ -42,6 +46,7 @@ export function Dashboard() {
           icon={<Activity className="w-5 h-5 text-amber-400" />} 
           color="from-amber-600/20 to-orange-600/5"
           borderColor="border-amber-500/20"
+          onClick={() => navigate("/cases")}
         />
         <KpiCard 
           title="Daily Revenue" 
@@ -60,6 +65,7 @@ export function Dashboard() {
           icon={<Users className="w-5 h-5 text-purple-400" />} 
           color="from-purple-600/20 to-pink-600/5"
           borderColor="border-purple-500/20"
+          onClick={() => navigate("/cases")}
         />
       </div>
 
@@ -169,11 +175,31 @@ export function Dashboard() {
   );
 }
 
-function KpiCard({ title, value, trend, trendUp, icon, color, borderColor }: any) {
+type KpiCardProps = {
+  title: string;
+  value: string;
+  trend: string;
+  trendUp: boolean;
+  icon: React.ReactNode;
+  color: string;
+  borderColor: string;
+  onClick?: () => void;
+};
+
+function KpiCard({ title, value, trend, trendUp, icon, color, borderColor, onClick }: KpiCardProps) {
   return (
     <motion.div 
       whileHover={{ y: -5 }}
-      className={`bg-gradient-to-br ${color} bg-white/80 dark:bg-[#0A1222]/80 backdrop-blur-xl rounded-2xl p-5 border border-slate-200 dark:${borderColor} shadow-lg relative overflow-hidden group`}
+      onClick={onClick}
+      className={`bg-gradient-to-br ${color} bg-white/80 dark:bg-[#0A1222]/80 backdrop-blur-xl rounded-2xl p-5 border border-slate-200 dark:${borderColor} shadow-lg relative overflow-hidden group ${onClick ? "cursor-pointer" : ""}`}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      } : undefined}
     >
       <div className="flex justify-between items-start mb-4">
         <div className="p-2 rounded-xl bg-slate-50 dark:bg-[#050B14]/50 border border-slate-200 dark:border-slate-700/50 group-hover:scale-110 transition-transform">
@@ -186,6 +212,9 @@ function KpiCard({ title, value, trend, trendUp, icon, color, borderColor }: any
       <div>
         <h3 className="text-slate-500 dark:text-slate-400 text-sm font-medium mb-1">{title}</h3>
         <p className="text-3xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">{value}</p>
+        {onClick ? (
+          <p className="mt-2 text-xs font-medium text-blue-600 dark:text-blue-400">Open challan management</p>
+        ) : null}
       </div>
     </motion.div>
   );
