@@ -18,7 +18,7 @@ import { motion, AnimatePresence } from "motion/react";
 
 export function Layout() {
   const [profileOpen, setProfileOpen] = useState(false);
-  const [isDark, setIsDark] = useState(true);
+  const [isDark, setIsDark] = useState(false);
   const location = useLocation();
 
   useEffect(() => {
