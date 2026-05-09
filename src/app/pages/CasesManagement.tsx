@@ -1,19 +1,21 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
-import { Filter, MapPin, MessageSquareText, Search, ShieldAlert, User, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Filter, MapPin, MessageSquareText, Search, ShieldAlert, User, X } from "lucide-react";
 import { mockCases, type ViolationCase } from "../mockCases";
 
 type CaseFilters = {
   date: string;
   officer: string;
   violation: string;
+  search: string;
 };
 
 const emptyFilters: CaseFilters = {
   date: "",
   officer: "",
   violation: "",
+  search: "",
 };
 
 export function CasesManagement() {
@@ -22,6 +24,9 @@ export function CasesManagement() {
   const [selectedCase, setSelectedCase] = useState<ViolationCase | null>(null);
   const [draftFilters, setDraftFilters] = useState<CaseFilters>(emptyFilters);
   const [appliedFilters, setAppliedFilters] = useState<CaseFilters>(emptyFilters);
+  const [pageSizeInput, setPageSizeInput] = useState("20");
+  const [pageSize, setPageSize] = useState(20);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const officerOptions = useMemo(
     () => Array.from(new Set(mockCases.map((item) => item.user_name))).sort(),
@@ -37,14 +42,18 @@ export function CasesManagement() {
       date: searchParams.get("date") ?? "",
       officer: searchParams.get("officer") ?? "",
       violation: searchParams.get("violation") ?? "",
+      search: searchParams.get("search") ?? "",
     };
 
     setDraftFilters(filtersFromUrl);
     setAppliedFilters(filtersFromUrl);
     setIsFilterOpen(Boolean(filtersFromUrl.date || filtersFromUrl.officer || filtersFromUrl.violation));
+    setCurrentPage(1);
   }, [searchParams]);
 
   const filteredCases = useMemo(() => {
+    const searchValue = appliedFilters.search.trim().toLowerCase();
+
     return [...mockCases]
       .sort((left, right) => right.timestamp - left.timestamp)
       .filter((item) => {
@@ -52,22 +61,74 @@ export function CasesManagement() {
         const matchesDate = !appliedFilters.date || caseDate === appliedFilters.date;
         const matchesOfficer = !appliedFilters.officer || item.user_name === appliedFilters.officer;
         const matchesViolation = !appliedFilters.violation || item.reason === appliedFilters.violation;
+        const matchesSearch =
+          !searchValue ||
+          [
+            `CH${item.id}`,
+            item.user_name,
+            item.vehicle_number,
+            item.reason,
+            item.location,
+            item.status,
+          ].some((value) => value.toLowerCase().includes(searchValue));
 
-        return matchesDate && matchesOfficer && matchesViolation;
+        return matchesDate && matchesOfficer && matchesViolation && matchesSearch;
       });
   }, [appliedFilters]);
 
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(filteredCases.length / pageSize));
+    setCurrentPage((current) => Math.min(current, maxPage));
+  }, [filteredCases.length, pageSize]);
+
+  useEffect(() => {
+    const caseId = searchParams.get("caseId");
+
+    if (!caseId) {
+      return;
+    }
+
+    const matchedCase = mockCases.find((item) => item.id === caseId);
+    if (matchedCase) {
+      setSelectedCase(matchedCase);
+    }
+  }, [searchParams]);
+
   const hasActiveFilters = Object.values(appliedFilters).some(Boolean);
+  const totalPages = Math.max(1, Math.ceil(filteredCases.length / pageSize));
+  const paginatedCases = useMemo(() => {
+    const startIndex = (currentPage - 1) * pageSize;
+    return filteredCases.slice(startIndex, startIndex + pageSize);
+  }, [currentPage, filteredCases, pageSize]);
 
   const applyFilters = () => {
     setAppliedFilters(draftFilters);
     setSearchParams(buildSearchParams(draftFilters));
+    setCurrentPage(1);
   };
 
   const clearFilters = () => {
     setDraftFilters(emptyFilters);
     setAppliedFilters(emptyFilters);
     setSearchParams({});
+    setCurrentPage(1);
+  };
+
+  const applyPageSize = () => {
+    const parsedValue = Number.parseInt(pageSizeInput, 10);
+    const nextSize = Number.isNaN(parsedValue) ? 20 : Math.min(200, Math.max(1, parsedValue));
+    setPageSize(nextSize);
+    setPageSizeInput(String(nextSize));
+    setCurrentPage(1);
+  };
+
+  const closeSelectedCase = () => {
+    setSelectedCase(null);
+    if (searchParams.get("caseId")) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("caseId");
+      setSearchParams(nextParams);
+    }
   };
 
   return (
@@ -175,6 +236,7 @@ export function CasesManagement() {
 
           {hasActiveFilters ? (
             <div className="flex flex-wrap items-center gap-2">
+              {appliedFilters.search ? <FilterPill label={`Search: ${appliedFilters.search}`} /> : null}
               {appliedFilters.date ? <FilterPill label={appliedFilters.date} /> : null}
               {appliedFilters.officer ? <FilterPill label={appliedFilters.officer} /> : null}
               {appliedFilters.violation ? <FilterPill label={appliedFilters.violation} /> : null}
@@ -184,21 +246,66 @@ export function CasesManagement() {
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white/80 shadow-lg backdrop-blur-sm dark:border-slate-700/50 dark:bg-[#1e293b]">
-        <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-700/50 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-            <Search className="h-4 w-4" />
-            <span>{filteredCases.length} records visible</span>
+        <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 dark:border-slate-700/50 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-1 flex-col gap-3 md:flex-row md:items-center">
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={draftFilters.search}
+                onChange={(event) =>
+                  setDraftFilters((current) => ({ ...current, search: event.target.value }))
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    applyFilters();
+                  }
+                }}
+                placeholder="Search case id, officer, vehicle, violation, location..."
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm text-slate-700 outline-none transition focus:border-blue-400 dark:border-slate-700 dark:bg-[#111C30] dark:text-slate-200"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={applyFilters}
+                className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
+              >
+                Search
+              </button>
+              {hasActiveFilters ? (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+                >
+                  Reset
+                </button>
+              ) : null}
+            </div>
           </div>
-          {hasActiveFilters ? (
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="inline-flex items-center gap-2 self-start rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
-            >
-              <X className="h-4 w-4" />
-              Reset active filters
-            </button>
-          ) : null}
+
+          <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
+            <span>{filteredCases.length} records found</span>
+            <label className="flex items-center gap-2">
+              <span>Cases per page</span>
+              <input
+                type="number"
+                min="1"
+                max="200"
+                value={pageSizeInput}
+                onChange={(event) => setPageSizeInput(event.target.value)}
+                onBlur={applyPageSize}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    applyPageSize();
+                  }
+                }}
+                className="w-20 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-400 dark:border-slate-700 dark:bg-[#111C30] dark:text-slate-200"
+              />
+            </label>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -215,7 +322,7 @@ export function CasesManagement() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-700/50">
-              {filteredCases.map((item) => (
+              {paginatedCases.map((item) => (
                 <tr
                   key={item.id}
                   onClick={() => setSelectedCase(item)}
@@ -242,7 +349,7 @@ export function CasesManagement() {
                   </td>
                 </tr>
               ))}
-              {filteredCases.length === 0 ? (
+              {paginatedCases.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-6 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
                     No challans match the selected filters.
@@ -251,6 +358,36 @@ export function CasesManagement() {
               ) : null}
             </tbody>
           </table>
+        </div>
+
+        <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-4 text-sm text-slate-500 dark:border-slate-700/50 dark:text-slate-400 md:flex-row md:items-center md:justify-between">
+          <span>
+            Showing {(currentPage - 1) * pageSize + (paginatedCases.length ? 1 : 0)}-
+            {(currentPage - 1) * pageSize + paginatedCases.length} of {filteredCases.length}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+              disabled={currentPage === 1}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Prev
+            </button>
+            <span className="min-w-20 text-center">
+              Page {currentPage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+              disabled={currentPage === totalPages}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -263,7 +400,7 @@ export function CasesManagement() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setSelectedCase(null)}
+              onClick={closeSelectedCase}
               className="fixed inset-0 z-40 bg-slate-950/35 backdrop-blur-[2px]"
             />
 
@@ -277,19 +414,19 @@ export function CasesManagement() {
               <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5 dark:border-slate-700">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
-                    Case Details
+                    Officer Details
                   </p>
                   <h3 className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">
-                    CH{selectedCase.id}
+                    {selectedCase.user_name}
                   </h3>
                   <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                    {selectedCase.reason} for {selectedCase.vehicle_number}
+                    CH{selectedCase.id} • {selectedCase.reason} for {selectedCase.vehicle_number}
                   </p>
                 </div>
 
                 <button
                   type="button"
-                  onClick={() => setSelectedCase(null)}
+                  onClick={closeSelectedCase}
                   className="rounded-full border border-slate-200 p-2 text-slate-500 transition hover:text-slate-900 dark:border-slate-700 dark:text-slate-300 dark:hover:text-white"
                 >
                   <X className="h-5 w-5" />
@@ -467,6 +604,10 @@ function getSeverityTextClasses(severity: ViolationCase["severity"]) {
 
 function buildSearchParams(filters: CaseFilters) {
   const nextParams: Record<string, string> = {};
+
+  if (filters.search) {
+    nextParams.search = filters.search;
+  }
 
   if (filters.date) {
     nextParams.date = filters.date;
