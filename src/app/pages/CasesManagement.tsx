@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import { ChevronLeft, ChevronRight, Filter, MapPin, MessageSquareText, Search, ShieldAlert, User, X } from "lucide-react";
 import { mockCases, type ViolationCase } from "../mockCases";
+import { caseImageMap } from "../caseMedia";
 
 type CaseFilters = {
   date: string;
@@ -130,6 +131,8 @@ export function CasesManagement() {
       setSearchParams(nextParams);
     }
   };
+
+  const selectedCaseImages = selectedCase ? caseImageMap[selectedCase.id] ?? [] : [];
 
   return (
     <div className="relative flex flex-col h-full gap-6">
@@ -489,6 +492,25 @@ export function CasesManagement() {
                     {selectedCase.chat_history}
                   </pre>
                 </DetailSection>
+
+                {selectedCaseImages.length > 0 ? (
+                  <DetailSection title="Case Images">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {selectedCaseImages.map((imageSrc, index) => (
+                        <div
+                          key={`${selectedCase.id}-image-${index}`}
+                          className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-[#111C30]"
+                        >
+                          <img
+                            src={imageSrc}
+                            alt={`${selectedCase.user_name} case evidence ${index + 1}`}
+                            className="h-52 w-full object-cover"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </DetailSection>
+                ) : null}
               </div>
             </motion.aside>
           </>
