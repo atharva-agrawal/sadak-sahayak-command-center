@@ -1,112 +1,82 @@
 import { AnimatePresence, motion } from "motion/react";
-import { useMemo, useState } from "react";
-import { Filter, Search, X } from "lucide-react";
-import { mockCases } from "../mockData";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
+import { Filter, MapPin, MessageSquareText, Search, ShieldAlert, User, X } from "lucide-react";
+import { mockCases, type ViolationCase } from "../mockCases";
 
-type ChallanRow = {
-  challanId: string;
+type CaseFilters = {
   date: string;
-  vehicleNumber: string;
-  violation: string;
-  fine: number;
   officer: string;
-  status: string;
+  violation: string;
 };
 
-const manualRows: ChallanRow[] = [
-  {
-    challanId: "CH106",
-    date: "2026-05-01",
-    vehicleNumber: "DL02XY9999",
-    violation: "Signal Jump",
-    fine: 1000,
-    officer: "Ramesh",
-    status: "Pending",
-  },
-  {
-    challanId: "CH107",
-    date: "2026-05-01",
-    vehicleNumber: "MH01AB1111",
-    violation: "Speeding",
-    fine: 2000,
-    officer: "Amit Kumar",
-    status: "Paid",
-  },
-  {
-    challanId: "CH108",
-    date: "2026-04-30",
-    vehicleNumber: "KA05CD2222",
-    violation: "No Helmet",
-    fine: 500,
-    officer: "Rahul Singh",
-    status: "Pending",
-  },
-];
-
-const challanRows: ChallanRow[] = [
-  ...mockCases.map((item, index) => ({
-    challanId: `CH10${index + 1}`,
-    date: new Date(item.timestamp * 1000).toISOString().slice(0, 10),
-    vehicleNumber: item.vehicle_number,
-    violation: item.reason,
-    fine: item.fine,
-    officer: item.user_name,
-    status: item.status,
-  })),
-  ...manualRows,
-];
+const emptyFilters: CaseFilters = {
+  date: "",
+  officer: "",
+  violation: "",
+};
 
 export function CasesManagement() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [isFilterOpen, setIsFilterOpen] = useState(false);
-  const [draftFilters, setDraftFilters] = useState({
-    date: "",
-    officer: "",
-    violation: "",
-  });
-  const [appliedFilters, setAppliedFilters] = useState({
-    date: "",
-    officer: "",
-    violation: "",
-  });
+  const [selectedCase, setSelectedCase] = useState<ViolationCase | null>(null);
+  const [draftFilters, setDraftFilters] = useState<CaseFilters>(emptyFilters);
+  const [appliedFilters, setAppliedFilters] = useState<CaseFilters>(emptyFilters);
 
   const officerOptions = useMemo(
-    () => Array.from(new Set(challanRows.map((item) => item.officer))).sort(),
+    () => Array.from(new Set(mockCases.map((item) => item.user_name))).sort(),
     [],
   );
   const violationOptions = useMemo(
-    () => Array.from(new Set(challanRows.map((item) => item.violation))).sort(),
+    () => Array.from(new Set(mockCases.map((item) => item.reason))).sort(),
     [],
   );
 
-  const filteredCases = useMemo(() => {
-    return challanRows.filter((item) => {
-      const matchesDate = !appliedFilters.date || item.date === appliedFilters.date;
-      const matchesOfficer = !appliedFilters.officer || item.officer === appliedFilters.officer;
-      const matchesViolation = !appliedFilters.violation || item.violation === appliedFilters.violation;
+  useEffect(() => {
+    const filtersFromUrl = {
+      date: searchParams.get("date") ?? "",
+      officer: searchParams.get("officer") ?? "",
+      violation: searchParams.get("violation") ?? "",
+    };
 
-      return matchesDate && matchesOfficer && matchesViolation;
-    });
+    setDraftFilters(filtersFromUrl);
+    setAppliedFilters(filtersFromUrl);
+    setIsFilterOpen(Boolean(filtersFromUrl.date || filtersFromUrl.officer || filtersFromUrl.violation));
+  }, [searchParams]);
+
+  const filteredCases = useMemo(() => {
+    return [...mockCases]
+      .sort((left, right) => right.timestamp - left.timestamp)
+      .filter((item) => {
+        const caseDate = getDateValue(item.created_at);
+        const matchesDate = !appliedFilters.date || caseDate === appliedFilters.date;
+        const matchesOfficer = !appliedFilters.officer || item.user_name === appliedFilters.officer;
+        const matchesViolation = !appliedFilters.violation || item.reason === appliedFilters.violation;
+
+        return matchesDate && matchesOfficer && matchesViolation;
+      });
   }, [appliedFilters]);
 
   const hasActiveFilters = Object.values(appliedFilters).some(Boolean);
 
   const applyFilters = () => {
     setAppliedFilters(draftFilters);
+    setSearchParams(buildSearchParams(draftFilters));
   };
 
   const clearFilters = () => {
-    const emptyFilters = { date: "", officer: "", violation: "" };
     setDraftFilters(emptyFilters);
     setAppliedFilters(emptyFilters);
+    setSearchParams({});
   };
 
   return (
-    <div className="flex flex-col h-full gap-6">
+    <div className="relative flex flex-col h-full gap-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Challan Management</h2>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Review and filter violation records collected from field operations.
+            Review, filter, and inspect detailed violation records from field operations.
           </p>
         </div>
 
@@ -246,25 +216,29 @@ export function CasesManagement() {
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-700/50">
               {filteredCases.map((item) => (
-                <tr key={item.challanId} className="text-sm transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <td className="px-6 py-4 font-medium text-slate-700 dark:text-gray-300">{item.challanId}</td>
+                <tr
+                  key={item.id}
+                  onClick={() => setSelectedCase(item)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedCase(item);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  className="cursor-pointer text-sm transition-colors hover:bg-slate-50 focus:bg-slate-50 focus:outline-none dark:hover:bg-slate-800/50 dark:focus:bg-slate-800/50"
+                >
+                  <td className="px-6 py-4 font-medium text-slate-700 dark:text-gray-300">CH{item.id}</td>
                   <td className="px-6 py-4 text-slate-500 dark:text-gray-400">
-                    {new Date(item.date).toLocaleDateString()}
+                    {formatDateTime(item.created_at, { dateStyle: "medium" })}
                   </td>
-                  <td className="px-6 py-4 text-slate-700 dark:text-gray-300">{item.vehicleNumber}</td>
-                  <td className="px-6 py-4 text-slate-700 dark:text-gray-300">{item.violation}</td>
+                  <td className="px-6 py-4 text-slate-700 dark:text-gray-300">{item.vehicle_number}</td>
+                  <td className="px-6 py-4 text-slate-700 dark:text-gray-300">{item.reason}</td>
                   <td className="px-6 py-4 text-slate-700 dark:text-gray-300">Rs. {item.fine}</td>
-                  <td className="px-6 py-4 text-slate-500 dark:text-gray-400">{item.officer}</td>
+                  <td className="px-6 py-4 text-slate-500 dark:text-gray-400">{item.user_name}</td>
                   <td className="px-6 py-4">
-                    <span
-                      className={`rounded-full px-3 py-1 text-xs font-medium ${
-                        item.status === "Paid"
-                          ? "border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                          : "border border-orange-500/20 bg-orange-500/10 text-orange-600 dark:text-orange-400"
-                      }`}
-                    >
-                      {item.status}
-                    </span>
+                    <span className={getStatusClasses(item.status)}>{item.status}</span>
                   </td>
                 </tr>
               ))}
@@ -279,6 +253,110 @@ export function CasesManagement() {
           </table>
         </div>
       </div>
+
+      <AnimatePresence>
+        {selectedCase ? (
+          <>
+            <motion.button
+              type="button"
+              aria-label="Close case details"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedCase(null)}
+              className="fixed inset-0 z-40 bg-slate-950/35 backdrop-blur-[2px]"
+            />
+
+            <motion.aside
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ duration: 0.3, ease: "easeOut" }}
+              className="fixed right-0 top-0 z-50 flex h-screen w-full max-w-xl flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-[#08111f]"
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5 dark:border-slate-700">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                    Case Details
+                  </p>
+                  <h3 className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">
+                    CH{selectedCase.id}
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                    {selectedCase.reason} for {selectedCase.vehicle_number}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedCase(null)}
+                  className="rounded-full border border-slate-200 p-2 text-slate-500 transition hover:text-slate-900 dark:border-slate-700 dark:text-slate-300 dark:hover:text-white"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <InfoCard
+                    icon={<ShieldAlert className="h-4 w-4" />}
+                    label="Severity"
+                    value={selectedCase.severity}
+                    valueClassName={getSeverityTextClasses(selectedCase.severity)}
+                  />
+                  <InfoCard
+                    icon={<User className="h-4 w-4" />}
+                    label="Officer"
+                    value={selectedCase.user_name}
+                  />
+                  <InfoCard
+                    icon={<MapPin className="h-4 w-4" />}
+                    label="Status"
+                    value={selectedCase.status}
+                  />
+                </div>
+
+                <DetailSection title="Case Overview">
+                  <DetailGrid
+                    items={[
+                      ["Case ID", `CH${selectedCase.id}`],
+                      ["User ID", selectedCase.user_id],
+                      ["Violation", selectedCase.reason],
+                      ["Vehicle Number", selectedCase.vehicle_number],
+                      ["Fine", `Rs. ${selectedCase.fine}`],
+                      ["Language", selectedCase.language.toUpperCase()],
+                      ["Created At", formatDateTime(selectedCase.created_at, { dateStyle: "medium", timeStyle: "short" })],
+                      ["Event Timestamp", formatDateTime(selectedCase.timestamp * 1000, { dateStyle: "medium", timeStyle: "short" })],
+                    ]}
+                  />
+                </DetailSection>
+
+                <DetailSection title="Location">
+                  <DetailGrid
+                    items={[
+                      ["Place", selectedCase.location],
+                      ["Latitude", selectedCase.latitude.toFixed(6)],
+                      ["Longitude", selectedCase.longitude.toFixed(6)],
+                    ]}
+                  />
+                </DetailSection>
+
+                <DetailSection title="Notes">
+                  <p className="rounded-2xl bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-700 dark:bg-[#111C30] dark:text-slate-200">
+                    {selectedCase.notes}
+                  </p>
+                </DetailSection>
+
+                <DetailSection title="Chat History" icon={<MessageSquareText className="h-4 w-4" />}>
+                  <pre className="whitespace-pre-wrap rounded-2xl bg-slate-950 px-4 py-4 text-sm leading-6 text-slate-100 dark:bg-[#030712]">
+                    {selectedCase.chat_history}
+                  </pre>
+                </DetailSection>
+              </div>
+            </motion.aside>
+          </>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }
@@ -289,4 +367,118 @@ function FilterPill({ label }: { label: string }) {
       {label}
     </span>
   );
+}
+
+function InfoCard({
+  icon,
+  label,
+  value,
+  valueClassName,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 dark:border-slate-700 dark:bg-[#111C30]">
+      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+        {icon}
+        {label}
+      </div>
+      <p className={`mt-3 text-sm font-semibold text-slate-800 dark:text-slate-100 ${valueClassName ?? ""}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function DetailSection({
+  title,
+  children,
+  icon,
+}: {
+  title: string;
+  children: React.ReactNode;
+  icon?: React.ReactNode;
+}) {
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+        {icon}
+        {title}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function DetailGrid({ items }: { items: Array<[string, string]> }) {
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {items.map(([label, value]) => (
+        <div key={label} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 dark:border-slate-700 dark:bg-[#111C30]">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            {label}
+          </p>
+          <p className="mt-2 break-words text-sm font-medium text-slate-800 dark:text-slate-100">
+            {value}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function getDateValue(value: string) {
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+function formatDateTime(
+  value: string | number,
+  options?: Intl.DateTimeFormatOptions,
+) {
+  return new Intl.DateTimeFormat("en-IN", options).format(new Date(value));
+}
+
+function getStatusClasses(status: ViolationCase["status"]) {
+  if (status === "Paid") {
+    return "rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-600 dark:text-emerald-400";
+  }
+
+  if (status === "Disputed") {
+    return "rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-600 dark:text-amber-400";
+  }
+
+  return "rounded-full border border-orange-500/20 bg-orange-500/10 px-3 py-1 text-xs font-medium text-orange-600 dark:text-orange-400";
+}
+
+function getSeverityTextClasses(severity: ViolationCase["severity"]) {
+  if (severity === "high") {
+    return "text-red-600 dark:text-red-400";
+  }
+
+  if (severity === "medium") {
+    return "text-amber-600 dark:text-amber-400";
+  }
+
+  return "text-emerald-600 dark:text-emerald-400";
+}
+
+function buildSearchParams(filters: CaseFilters) {
+  const nextParams: Record<string, string> = {};
+
+  if (filters.date) {
+    nextParams.date = filters.date;
+  }
+
+  if (filters.officer) {
+    nextParams.officer = filters.officer;
+  }
+
+  if (filters.violation) {
+    nextParams.violation = filters.violation;
+  }
+
+  return nextParams;
 }
