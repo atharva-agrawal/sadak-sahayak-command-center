@@ -1,91 +1,174 @@
+import { useEffect, useMemo, useRef } from "react";
+import maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 import { MapPin } from "lucide-react";
-import { motion } from "motion/react";
-import { mapHotspots } from "../mockData";
+import { mockCases } from "../mockCases";
+
+const lightStyle = "https://tiles.openfreemap.org/styles/positron";
+const darkStyle = "https://tiles.openfreemap.org/styles/dark";
+
+type CityHotspot = {
+  city: string;
+  count: number;
+  latitude: number;
+  longitude: number;
+  highSeverityCount: number;
+  topViolation: string;
+};
 
 export function MapWidget() {
-  // A stylized abstract geographic representation since we don't have exact accurate SVG bounds.
-  // We'll use a glassmorphic container and a custom path that looks somewhat like a state boundary.
-  
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<maplibregl.Map | null>(null);
+  const markersRef = useRef<maplibregl.Marker[]>([]);
+
+  const hotspots = useMemo<CityHotspot[]>(() => {
+    const grouped = new Map<string, { count: number; latSum: number; lngSum: number; highSeverityCount: number; reasons: Map<string, number> }>();
+
+    for (const item of mockCases) {
+      const current = grouped.get(item.location) ?? {
+        count: 0,
+        latSum: 0,
+        lngSum: 0,
+        highSeverityCount: 0,
+        reasons: new Map<string, number>(),
+      };
+
+      current.count += 1;
+      current.latSum += item.latitude;
+      current.lngSum += item.longitude;
+      if (item.severity === "high") {
+        current.highSeverityCount += 1;
+      }
+      current.reasons.set(item.reason, (current.reasons.get(item.reason) ?? 0) + 1);
+      grouped.set(item.location, current);
+    }
+
+    return Array.from(grouped.entries())
+      .map(([city, value]) => ({
+        city,
+        count: value.count,
+        latitude: value.latSum / value.count,
+        longitude: value.lngSum / value.count,
+        highSeverityCount: value.highSeverityCount,
+        topViolation: Array.from(value.reasons.entries()).sort((left, right) => right[1] - left[1])[0]?.[0] ?? "N/A",
+      }))
+      .sort((left, right) => right.count - left.count);
+  }, []);
+
+  useEffect(() => {
+    if (!mapContainerRef.current || mapRef.current) {
+      return;
+    }
+
+    const isDark = document.documentElement.classList.contains("dark");
+    const map = new maplibregl.Map({
+      container: mapContainerRef.current,
+      style: isDark ? darkStyle : lightStyle,
+      center: [82.0, 21.5],
+      zoom: 5.6,
+      attributionControl: true,
+    });
+
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    mapRef.current = map;
+
+    const observer = new MutationObserver(() => {
+      const nextDark = document.documentElement.classList.contains("dark");
+      map.setStyle(nextDark ? darkStyle : lightStyle);
+    });
+
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+
+    return () => {
+      observer.disconnect();
+      markersRef.current.forEach((marker) => marker.remove());
+      markersRef.current = [];
+      map.remove();
+      mapRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!mapRef.current) {
+      return;
+    }
+
+    markersRef.current.forEach((marker) => marker.remove());
+    markersRef.current = [];
+
+    hotspots.forEach((spot) => {
+      const element = document.createElement("button");
+      element.type = "button";
+      element.className = getMarkerClasses(spot.count);
+      element.innerHTML = `<span>${spot.count}</span>`;
+
+      const popup = new maplibregl.Popup({ offset: 18 }).setHTML(`
+        <div style="min-width: 180px; font-family: sans-serif;">
+          <div style="font-weight: 700; font-size: 14px; margin-bottom: 6px;">${spot.city}</div>
+          <div style="font-size: 12px; color: #475569; line-height: 1.6;">
+            <div>Total cases: <strong>${spot.count}</strong></div>
+            <div>High severity: <strong>${spot.highSeverityCount}</strong></div>
+            <div>Top violation: <strong>${spot.topViolation}</strong></div>
+          </div>
+        </div>
+      `);
+
+      const marker = new maplibregl.Marker({ element, anchor: "center" })
+        .setLngLat([spot.longitude, spot.latitude])
+        .setPopup(popup)
+        .addTo(mapRef.current!);
+
+      markersRef.current.push(marker);
+    });
+  }, [hotspots]);
+
+  const totalCases = hotspots.reduce((sum, spot) => sum + spot.count, 0);
+  const topCity = hotspots[0];
+
   return (
-    <div className="relative w-full h-full min-h-[300px] flex items-center justify-center bg-slate-50/80 dark:bg-[#050B14]/40 rounded-xl border border-slate-200 dark:border-indigo-500/10 overflow-hidden group">
-      {/* Background Grid for techy feel */}
-      <div 
-        className="absolute inset-0 opacity-[0.05] dark:opacity-[0.15]" 
-        style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #818cf8 1px, transparent 0)', backgroundSize: '24px 24px' }}
-      />
-      
-      {/* Abstract Map Area Wrapper */}
-      <div className="relative w-[80%] h-[90%] flex items-center justify-center">
-        {/* Abstract State Outline (Vaguely central India/Chhattisgarh shape) */}
-        <svg viewBox="0 0 200 300" className="w-full h-full drop-shadow-[0_0_15px_rgba(59,130,246,0.1)] dark:drop-shadow-[0_0_15px_rgba(59,130,246,0.3)]">
-          <path 
-            d="M 90,10 C 110,15 130,40 140,70 C 145,90 160,110 170,140 C 180,180 160,220 140,250 C 120,280 90,290 70,280 C 50,270 30,240 20,200 C 10,160 30,120 40,90 C 50,60 70,30 90,10 Z" 
-            fill="rgba(226, 232, 240, 0.6)" 
-            stroke="rgba(99, 102, 241, 0.3)" 
-            strokeWidth="2"
-            className="transition-all duration-1000 group-hover:stroke-[rgba(99,102,241,0.5)] group-hover:fill-[rgba(226,232,240,0.8)] dark:fill-[rgba(30,41,59,0.4)] dark:stroke-[rgba(99,102,241,0.5)] dark:group-hover:stroke-[rgba(99,102,241,0.8)] dark:group-hover:fill-[rgba(30,41,59,0.6)]"
-          />
-          <path 
-            d="M 90,10 C 110,15 130,40 140,70 C 145,90 160,110 170,140" 
-            fill="none" 
-            stroke="#3b82f6" 
-            strokeWidth="3" 
-            strokeDasharray="4 4"
-            className="animate-pulse opacity-50"
-          />
-        </svg>
+    <div className="relative h-full min-h-[300px] overflow-hidden rounded-xl border border-slate-200 bg-slate-50/80 dark:border-indigo-500/10 dark:bg-[#050B14]/40">
+      <div ref={mapContainerRef} className="h-full w-full" />
 
-        {/* Overlay Hotspots */}
-        {mapHotspots.map((spot, idx) => {
-          // Normalize coordinates somewhat to fit within our arbitrary 200x300 SVG bounding box
-          // Latitude ~ 19 to 23 (Lower is bottom)
-          // Longitude ~ 81 to 84 (Lower is left)
-          const normY = 100 - ((spot.lat - 19) / 4) * 100; // inverted Y
-          const normX = ((spot.lng - 81) / 3) * 100;
-          
-          let colorClass = "bg-emerald-500";
-          let glowClass = "shadow-emerald-500/50";
-          if (spot.count > 20) { colorClass = "bg-amber-400"; glowClass = "shadow-amber-400/50"; }
-          if (spot.count > 35) { colorClass = "bg-red-500"; glowClass = "shadow-red-500/50"; }
-
-          return (
-            <motion.div
-              key={spot.id}
-              initial={{ scale: 0, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: idx * 0.2, type: "spring" }}
-              className="absolute group/pin cursor-pointer"
-              style={{ top: `${Math.max(10, Math.min(85, normY))}%`, left: `${Math.max(20, Math.min(80, normX))}%` }}
-            >
-              {/* Pulsing ring */}
-              <div className={`absolute -inset-2 rounded-full ${colorClass} opacity-30 animate-ping`} />
-              
-              {/* Core dot */}
-              <div className={`relative w-3 h-3 rounded-full ${colorClass} shadow-[0_0_10px_2px] ${glowClass} border border-white dark:border-[#050B14] z-10`} />
-              
-              {/* Tooltip */}
-              <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 bg-white/90 dark:bg-[#0A1222]/90 backdrop-blur-md border border-slate-200 dark:border-indigo-500/30 rounded-lg p-2 text-xs w-32 opacity-0 group-hover/pin:opacity-100 transition-opacity pointer-events-none z-20 shadow-xl">
-                <p className="font-semibold text-slate-800 dark:text-slate-200">{spot.name}</p>
-                <div className="flex items-center justify-between mt-1 text-slate-500 dark:text-slate-400">
-                  <span>Violations:</span>
-                  <span className={`font-bold ${colorClass.replace('bg-', 'text-')}`}>{spot.count}</span>
-                </div>
-              </div>
-            </motion.div>
-          );
-        })}
+      <div className="absolute left-4 top-4 rounded-2xl border border-slate-200 bg-white/85 px-4 py-3 shadow-md backdrop-blur dark:border-indigo-500/20 dark:bg-[#0A1222]/85">
+        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          <MapPin className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+          OpenFreeMap Live View
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <p className="text-slate-500 dark:text-slate-400">Cities tracked</p>
+            <p className="font-semibold text-slate-900 dark:text-slate-100">{hotspots.length}</p>
+          </div>
+          <div>
+            <p className="text-slate-500 dark:text-slate-400">Total cases</p>
+            <p className="font-semibold text-slate-900 dark:text-slate-100">{totalCases}</p>
+          </div>
+        </div>
       </div>
 
-      <div className="absolute bottom-4 left-4 bg-white/80 dark:bg-[#0A1222]/80 backdrop-blur border border-slate-200 dark:border-indigo-500/20 rounded-lg p-3 shadow-md dark:shadow-none">
-        <h4 className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-2">
-          <MapPin className="w-3 h-3 text-blue-600 dark:text-blue-400" /> Live Zone Status
-        </h4>
-        <div className="flex flex-col gap-1 text-[10px] text-slate-600 dark:text-slate-400">
-          <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_5px_rgba(239,68,68,0.5)] dark:shadow-[0_0_5px_rgba(239,68,68,0.8)]"/> Critical {'>'} 35 cases/hr</div>
-          <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_5px_rgba(251,191,36,0.5)] dark:shadow-[0_0_5px_rgba(250,204,21,0.8)]"/> Elevated</div>
-          <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)] dark:shadow-[0_0_5px_rgba(34,197,94,0.8)]"/> Normal</div>
-        </div>
+      <div className="absolute bottom-4 left-4 rounded-2xl border border-slate-200 bg-white/85 px-4 py-3 shadow-md backdrop-blur dark:border-indigo-500/20 dark:bg-[#0A1222]/85">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          Highest Activity
+        </p>
+        <p className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
+          {topCity ? topCity.city : "No city data"}
+        </p>
+        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          {topCity ? `${topCity.count} cases • ${topCity.topViolation}` : "Markers will appear when case data is available."}
+        </p>
       </div>
     </div>
   );
+}
+
+function getMarkerClasses(count: number) {
+  if (count >= 18) {
+    return "flex h-11 w-11 items-center justify-center rounded-full border-2 border-white bg-red-500 text-sm font-bold text-white shadow-[0_10px_25px_rgba(239,68,68,0.45)]";
+  }
+
+  if (count >= 10) {
+    return "flex h-10 w-10 items-center justify-center rounded-full border-2 border-white bg-amber-400 text-sm font-bold text-slate-900 shadow-[0_10px_25px_rgba(251,191,36,0.45)]";
+  }
+
+  return "flex h-9 w-9 items-center justify-center rounded-full border-2 border-white bg-emerald-500 text-sm font-bold text-white shadow-[0_10px_25px_rgba(34,197,94,0.4)]";
 }
