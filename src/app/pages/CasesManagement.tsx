@@ -23,6 +23,7 @@ export function CasesManagement() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [selectedCase, setSelectedCase] = useState<ViolationCase | null>(null);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [draftFilters, setDraftFilters] = useState<CaseFilters>(emptyFilters);
   const [appliedFilters, setAppliedFilters] = useState<CaseFilters>(emptyFilters);
   const [pageSizeInput, setPageSizeInput] = useState("20");
@@ -124,6 +125,7 @@ export function CasesManagement() {
   };
 
   const closeSelectedCase = () => {
+    setSelectedImage(null);
     setSelectedCase(null);
     if (searchParams.get("caseId")) {
       const nextParams = new URLSearchParams(searchParams);
@@ -497,22 +499,63 @@ export function CasesManagement() {
                   <DetailSection title="Case Images">
                     <div className="grid gap-3 sm:grid-cols-2">
                       {selectedCaseImages.map((imageSrc, index) => (
-                        <div
+                        <button
                           key={`${selectedCase.id}-image-${index}`}
-                          className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-[#111C30]"
+                          type="button"
+                          onClick={() => setSelectedImage(imageSrc)}
+                          className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 text-left transition hover:border-blue-300 dark:border-slate-700 dark:bg-[#111C30] dark:hover:border-blue-500/30"
                         >
                           <img
                             src={imageSrc}
                             alt={`${selectedCase.user_name} case evidence ${index + 1}`}
-                            className="h-52 w-full object-cover"
+                            className="h-52 w-full bg-slate-100 object-contain dark:bg-[#0b1322]"
                           />
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </DetailSection>
                 ) : null}
               </div>
             </motion.aside>
+
+            <AnimatePresence>
+              {selectedImage ? (
+                <>
+                  <motion.button
+                    type="button"
+                    aria-label="Close image preview"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    onClick={() => setSelectedImage(null)}
+                    className="fixed inset-0 z-[60] bg-slate-950/60 backdrop-blur-md"
+                  />
+
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.96 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.96 }}
+                    className="fixed inset-0 z-[70] flex items-center justify-center p-6"
+                  >
+                    <div className="relative flex max-h-[90vh] w-full max-w-5xl items-center justify-center rounded-3xl border border-slate-200 bg-white/95 p-4 shadow-2xl dark:border-slate-700 dark:bg-[#08111f]/95">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedImage(null)}
+                        className="absolute right-4 top-4 rounded-full border border-slate-200 bg-white/90 p-2 text-slate-600 transition hover:text-slate-900 dark:border-slate-700 dark:bg-[#0f172a]/90 dark:text-slate-300 dark:hover:text-white"
+                      >
+                        <X className="h-5 w-5" />
+                      </button>
+
+                      <img
+                        src={selectedImage}
+                        alt={`${selectedCase.user_name} full evidence view`}
+                        className="max-h-[82vh] w-full rounded-2xl object-contain"
+                      />
+                    </div>
+                  </motion.div>
+                </>
+              ) : null}
+            </AnimatePresence>
           </>
         ) : null}
       </AnimatePresence>
