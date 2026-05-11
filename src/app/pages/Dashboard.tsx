@@ -11,11 +11,10 @@ import {
   Cell,
 } from "recharts";
 import { motion } from "motion/react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import {
-  weeklyChallansData,
-  violationDistributionData,
-} from "../mockData";
+import { violationDistributionData } from "../mockData";
+import { mockCases } from "../mockCases";
 import { MapWidget } from "../components/MapWidget";
 import { LiveFeed } from "../components/LiveFeed";
 import { AiInsights } from "../components/AiInsights";
@@ -23,6 +22,48 @@ import { Shield, Users, Activity } from "lucide-react";
 
 export function Dashboard() {
   const navigate = useNavigate();
+  const [trendViolation, setTrendViolation] = useState("All violations");
+  const [trendOfficer, setTrendOfficer] = useState("All officers");
+
+  const violationOptions = useMemo(
+    () => ["All violations", ...Array.from(new Set(mockCases.map((item) => item.reason))).sort()],
+    [],
+  );
+  const officerOptions = useMemo(
+    () => ["All officers", ...Array.from(new Set(mockCases.map((item) => item.user_name))).sort()],
+    [],
+  );
+
+  const weeklyTrendData = useMemo(() => {
+    const latestCaseDate = [...mockCases]
+      .sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime())
+      .at(-1)?.created_at;
+
+    const endDate = latestCaseDate ? new Date(latestCaseDate) : new Date();
+    endDate.setHours(0, 0, 0, 0);
+
+    return Array.from({ length: 7 }, (_, index) => {
+      const current = new Date(endDate);
+      current.setDate(endDate.getDate() - (6 - index));
+      const isoDate = current.toISOString().slice(0, 10);
+
+      const cases = mockCases.filter((item) => {
+        const itemDate = new Date(item.created_at).toISOString().slice(0, 10);
+        const matchesDate = itemDate === isoDate;
+        const matchesViolation =
+          trendViolation === "All violations" || item.reason === trendViolation;
+        const matchesOfficer =
+          trendOfficer === "All officers" || item.user_name === trendOfficer;
+
+        return matchesDate && matchesViolation && matchesOfficer;
+      });
+
+      return {
+        day: current.toLocaleDateString("en-IN", { weekday: "short" }),
+        cases: cases.length,
+      };
+    });
+  }, [trendOfficer, trendViolation]);
 
   return (
     <div className="space-y-6 pb-10">
@@ -59,7 +100,7 @@ export function Dashboard() {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 h-[450px]">
+      <div className="grid grid-cols-1 gap-6 h-[450px] lg:grid-cols-3">
         <div className="lg:col-span-2 bg-white/60 dark:bg-[#0A1222]/60 backdrop-blur-md rounded-2xl border border-slate-200 dark:border-indigo-500/10 shadow-lg flex flex-col overflow-hidden">
           <div className="p-5 border-b border-slate-200 dark:border-indigo-500/10 flex justify-between items-center bg-slate-50/40 dark:bg-[#050B14]/40">
             <div>
@@ -83,10 +124,36 @@ export function Dashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 auto-rows-[350px]">
         <div className="lg:col-span-1 bg-white/60 dark:bg-[#0A1222]/60 backdrop-blur-md rounded-2xl p-5 border border-slate-200 dark:border-indigo-500/10 shadow-lg flex flex-col min-h-[300px]">
-          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100 uppercase tracking-wider mb-4">7-Day Case Volume</h3>
+          <div className="mb-4 flex flex-col gap-3">
+            <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100 uppercase tracking-wider">7-Day Case Volume</h3>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <select
+                value={trendViolation}
+                onChange={(event) => setTrendViolation(event.target.value)}
+                className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 outline-none transition focus:border-blue-400 dark:border-slate-700 dark:bg-[#111C30] dark:text-slate-200"
+              >
+                {violationOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={trendOfficer}
+                onChange={(event) => setTrendOfficer(event.target.value)}
+                className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 outline-none transition focus:border-blue-400 dark:border-slate-700 dark:bg-[#111C30] dark:text-slate-200"
+              >
+                {officerOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
           <div className="flex-1 min-h-0 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={weeklyChallansData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <AreaChart data={weeklyTrendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorCases" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
