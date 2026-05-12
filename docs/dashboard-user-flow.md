@@ -48,6 +48,12 @@ Each of these currently routes to challan management for deeper inspection.
 - Review the last 7 days of case volume.
 - Filter the chart by violation type.
 - Filter the chart by officer.
+- clicking the data will led to challan managment with filter auto applied
+
+### Violation Breakdown
+
+- Filter the chart by last 7 days or last 30 days.
+- Filter the chart by officer.
 
 ### From Challan Management
 
