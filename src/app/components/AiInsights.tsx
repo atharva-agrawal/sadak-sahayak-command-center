@@ -8,8 +8,9 @@ export function AiInsights() {
 
   useEffect(() => {
     let isMounted = true;
-    generateAiInsights().then((data) => {
-      if (isMounted) setInsights(data);
+    generateAiInsights().then((result) => {
+      if (!isMounted) return;
+      setInsights(result.insights);
     });
     return () => {
       isMounted = false;
