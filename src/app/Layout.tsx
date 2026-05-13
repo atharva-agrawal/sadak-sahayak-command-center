@@ -15,9 +15,11 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { useMsal } from "@azure/msal-react";
 import { mockCases } from "./mockCases";
 
 export function Layout() {
+  const { instance, accounts } = useMsal();
   const navigate = useNavigate();
   const location = useLocation();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -25,6 +27,9 @@ export function Layout() {
   const [isDark, setIsDark] = useState(false);
   const [globalSearch, setGlobalSearch] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
+  const activeAccount = accounts[0];
+  const displayName = activeAccount?.name ?? "Cmdr. Sharma";
+  const displayEmail = activeAccount?.username ?? "placeholder@department.gov.in";
 
   useEffect(() => {
     if (isDark) {
@@ -181,7 +186,7 @@ export function Layout() {
                   </div>
                 </div>
                 <div className="hidden text-left sm:block">
-                  <p className="text-sm font-medium text-slate-800 dark:text-slate-200">Cmdr. Sharma</p>
+                  <p className="text-sm font-medium text-slate-800 dark:text-slate-200">{displayName}</p>
                   <p className="text-[10px] text-slate-500 dark:text-slate-400">HQ Supervisor</p>
                 </div>
                 <ChevronDown className="h-4 w-4 text-slate-400" />
@@ -210,7 +215,11 @@ export function Layout() {
                         <Settings className="h-4 w-4" /> System Settings
                       </button>
                       <div className="my-1 h-px bg-slate-200 dark:bg-indigo-500/20" />
-                      <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-red-600 transition-colors hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-500/10 dark:hover:text-red-300">
+                      <button
+                        type="button"
+                        onClick={() => instance.logoutRedirect()}
+                        className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-red-600 transition-colors hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-500/10 dark:hover:text-red-300"
+                      >
                         <LogOut className="h-4 w-4" /> Logout Session
                       </button>
                     </div>
@@ -251,7 +260,7 @@ export function Layout() {
                       Profile
                     </p>
                     <h3 className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">
-                      Cmdr. Sharma
+                      {displayName}
                     </h3>
                     <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                       HQ dashboard access profile
@@ -280,7 +289,7 @@ export function Layout() {
                         </div>
                       </div>
                       <div>
-                        <p className="text-lg font-semibold text-slate-900 dark:text-slate-100">Cmdr. Sharma</p>
+                        <p className="text-lg font-semibold text-slate-900 dark:text-slate-100">{displayName}</p>
                         <p className="text-sm text-slate-500 dark:text-slate-400">Supervisor Profile Placeholder</p>
                       </div>
                     </div>
@@ -289,7 +298,7 @@ export function Layout() {
                   <ProfileSection
                     title="Identity & Role"
                     items={[
-                      ["Name", "Cmdr. Sharma"],
+                      ["Name", displayName],
                       ["Badge / Employee ID", "Placeholder"],
                       ["Rank", "SP / HQ Supervisor"],
                       ["Department", "Traffic Command Center"],
@@ -300,7 +309,7 @@ export function Layout() {
                   <ProfileSection
                     title="Account & Access Info"
                     items={[
-                      ["Login Email", "placeholder@department.gov.in"],
+                      ["Login Email", displayEmail],
                       ["Last Login", "Placeholder timestamp"],
                       ["Access Level", "Dashboard read/write placeholder"],
                     ]}
