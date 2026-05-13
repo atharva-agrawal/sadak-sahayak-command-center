@@ -1,8 +1,11 @@
 import { motion } from "motion/react";
+import { useNavigate } from "react-router";
 import { recentActivity } from "../mockData";
 import { ShieldAlert, IndianRupee, MessageSquare, AlertTriangle } from "lucide-react";
 
 export function LiveFeed() {
+  const navigate = useNavigate();
+
   const getIcon = (type: string) => {
     switch(type) {
       case 'challan': return <ShieldAlert className="w-4 h-4 text-blue-400" />;
@@ -33,7 +36,13 @@ export function LiveFeed() {
           </span>
           Live Officer Feed
         </h3>
-        <button className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 transition-colors">View All</button>
+        <button
+          type="button"
+          onClick={() => navigate("/cases")}
+          className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 transition-colors"
+        >
+          View All
+        </button>
       </div>
       
       <div className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700 scrollbar-track-transparent">
@@ -50,7 +59,13 @@ export function LiveFeed() {
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">{act.officer}</p>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/cases?officer=${encodeURIComponent(act.officer)}`)}
+                  className="truncate text-left text-sm font-medium text-slate-800 transition hover:text-blue-600 dark:text-slate-200 dark:hover:text-blue-300"
+                >
+                  {act.officer}
+                </button>
                 <span className="text-[10px] text-slate-500 whitespace-nowrap">{act.time}</span>
               </div>
               <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">{act.action}</p>

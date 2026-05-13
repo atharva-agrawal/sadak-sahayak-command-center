@@ -6,12 +6,12 @@ export const mockCases = [
     location: "Raipur Central",
     latitude: 21.2514,
     longitude: 81.6296,
-    severity: "high", // red
+    severity: "high",
     timestamp: 1777699229,
     user_name: "Amit Kumar",
     vehicle_number: "CG04AB1234",
     fine: 1500,
-    status: "Pending"
+    status: "Pending",
   },
   {
     id: "2",
@@ -20,12 +20,12 @@ export const mockCases = [
     location: "Bhilai Sector 6",
     latitude: 21.1938,
     longitude: 81.3509,
-    severity: "medium", // yellow
+    severity: "medium",
     timestamp: 1777699782,
     user_name: "Rahul Singh",
     vehicle_number: "CG07XY5678",
     fine: 1000,
-    status: "Paid"
+    status: "Paid",
   },
   {
     id: "3",
@@ -34,41 +34,41 @@ export const mockCases = [
     location: "Bilaspur Chowk",
     latitude: 22.0797,
     longitude: 82.1409,
-    severity: "low", // green
+    severity: "low",
     timestamp: 1777700841,
     user_name: "Suresh",
     vehicle_number: "CG10CD9876",
     fine: 500,
-    status: "Pending"
+    status: "Pending",
   },
   {
     id: "4",
     user_id: "u4",
     reason: "Drunk Driving",
     location: "Raipur Highway",
-    latitude: 21.3000,
-    longitude: 81.6500,
+    latitude: 21.3,
+    longitude: 81.65,
     severity: "high",
     timestamp: 1777701873,
     user_name: "Vikram",
     vehicle_number: "CG04EF4321",
     fine: 10000,
-    status: "Pending"
+    status: "Pending",
   },
   {
     id: "5",
     user_id: "u5",
     reason: "Wrong Way",
     location: "Durg Bypass",
-    latitude: 21.1900,
-    longitude: 81.2800,
+    latitude: 21.19,
+    longitude: 81.28,
     severity: "medium",
     timestamp: 1777702132,
     user_name: "Deepak",
     vehicle_number: "CG07GH5555",
     fine: 2000,
-    status: "Paid"
-  }
+    status: "Paid",
+  },
 ];
 
 export const weeklyChallansData = [
@@ -90,16 +90,16 @@ export const violationDistributionData = [
 ];
 
 export const recentActivity = [
-  { id: 1, officer: "Amit K.", action: "Issued Challan", details: "Over-speeding at Raipur Central", time: "2 min ago", type: "challan" },
-  { id: 2, officer: "Rahul S.", action: "Query", details: "Checked section for tinted glass", time: "5 min ago", type: "query" },
-  { id: 3, officer: "Suresh P.", action: "Payment Collected", details: "₹500 for No Helmet", time: "12 min ago", type: "payment" },
-  { id: 4, officer: "Vikram D.", action: "Reported Jam", details: "Heavy traffic at Bilaspur Chowk", time: "18 min ago", type: "alert" },
+  { id: 1, officer: "Amit Kumar", action: "Issued Challan", details: "Over-speeding at Raipur Central", time: "2 min ago", type: "challan" },
+  { id: 2, officer: "Rahul Singh", action: "Query", details: "Checked section for tinted glass", time: "5 min ago", type: "query" },
+  { id: 3, officer: "Suresh Patel", action: "Payment Collected", details: "Rs. 500 for No Helmet", time: "12 min ago", type: "payment" },
+  { id: 4, officer: "Vikram Sharma", action: "Reported Jam", details: "Heavy traffic at Bilaspur Chowk", time: "18 min ago", type: "alert" },
 ];
 
 export const mapHotspots = [
   { id: 1, lat: 21.25, lng: 81.63, count: 45, name: "Raipur Zone A", trend: "up" },
-  { id: 2, lat: 21.20, lng: 81.35, count: 28, name: "Bhilai Sector", trend: "down" },
+  { id: 2, lat: 21.2, lng: 81.35, count: 28, name: "Bhilai Sector", trend: "down" },
   { id: 3, lat: 22.08, lng: 82.14, count: 12, name: "Bilaspur North", trend: "stable" },
-  { id: 4, lat: 19.10, lng: 81.95, count: 35, name: "Jagdalpur", trend: "up" },
-  { id: 5, lat: 23.13, lng: 83.18, count: 18, name: "Ambikapur", trend: "stable" }
+  { id: 4, lat: 19.1, lng: 81.95, count: 35, name: "Jagdalpur", trend: "up" },
+  { id: 5, lat: 23.13, lng: 83.18, count: 18, name: "Ambikapur", trend: "stable" },
 ];
