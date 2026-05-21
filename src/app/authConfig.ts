@@ -2,6 +2,10 @@ import { type Configuration, LogLevel } from "@azure/msal-browser";
 
 const clientId = import.meta.env.VITE_AZURE_CLIENT_ID ?? "";
 const tenantId = import.meta.env.VITE_AZURE_TENANT_ID ?? "";
+const apiScope = import.meta.env.VITE_AZURE_API_SCOPE ?? "";
+
+export const backendBaseUrl = import.meta.env.VITE_BACKEND_BASE_URL ?? "http://localhost:8000";
+export const backendScopes = apiScope ? [apiScope] : [];
 
 export const msalConfig: Configuration = {
   auth: {
@@ -25,5 +29,5 @@ export const msalConfig: Configuration = {
 };
 
 export const loginRequest = {
-  scopes: ["User.Read"],
+  scopes: backendScopes.length > 0 ? backendScopes : ["User.Read"],
 };
