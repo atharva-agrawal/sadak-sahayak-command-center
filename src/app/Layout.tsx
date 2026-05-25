@@ -50,9 +50,7 @@ export function Layout() {
         [
           `CH${item.id}`,
           item.user_name,
-          item.vehicle_number,
           item.reason,
-          item.location,
         ].some((value) => value.toLowerCase().includes(query)),
       )
       .slice(0, 3);
@@ -131,7 +129,7 @@ export function Layout() {
                     submitGlobalSearch();
                   }
                 }}
-                placeholder="Search cases, officers, vehicles..."
+                placeholder="Search cases, officers, violations..."
                 className="w-72 rounded-full border border-transparent bg-slate-100 py-2 pl-10 pr-4 text-sm text-slate-800 transition-all placeholder:text-slate-500 focus:border-blue-500/50 focus:outline-none focus:ring-1 focus:ring-blue-500/50 dark:border-indigo-500/20 dark:bg-[#0A1222]/80 dark:text-slate-200"
               />
 
@@ -148,10 +146,7 @@ export function Layout() {
                         {item.user_name}
                       </span>
                       <span className="text-xs text-slate-500 dark:text-slate-400">
-                        CH{item.id} • {item.vehicle_number} • {item.reason}
-                      </span>
-                      <span className="text-xs text-slate-400 dark:text-slate-500">
-                        {item.location}
+                        CH{item.id} | {item.reason}
                       </span>
                     </button>
                   ))}
