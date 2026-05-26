@@ -4,3 +4,7 @@ docs/openfreemap-guide.pdf
 .env.local
 .env
 sadak-sahayak-api/
+__pycache__/
+*.py[cod]
+*.pyo
+.env.production
