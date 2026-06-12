@@ -126,7 +126,11 @@ export function CasesManagement() {
     }
   };
 
-  const selectedCaseImages = selectedCase ? caseImageMap[String(selectedCase.id)] ?? [] : [];
+  const selectedCaseImages = selectedCase
+    ? (selectedCase.images && selectedCase.images.length > 0
+        ? selectedCase.images.map((img) => img.image_url)
+        : caseImageMap[String(selectedCase.id)] ?? [])
+    : [];
 
   return (
     <div className="relative flex flex-col h-full gap-6">
