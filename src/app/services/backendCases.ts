@@ -1,5 +1,14 @@
 import { backendBaseUrl, backendScopes } from "../authConfig";
 
+export type BackendCaseImage = {
+  id: number;
+  image_url: string;
+  original_filename: string | null;
+  content_type: string | null;
+  size_bytes: number | null;
+  sha256: string | null;
+};
+
 export type BackendCase = {
   id: number;
   user_id: string;
@@ -12,6 +21,7 @@ export type BackendCase = {
   language: string;
   created_at: string;
   user_name: string;
+  images?: BackendCaseImage[];
 };
 
 let casesCache: BackendCase[] | null = null;
@@ -23,17 +33,24 @@ export async function fetchBackendCases(token: string, params?: Record<string, s
     search.set("limit", "200");
   }
 
-  const response = await fetch(`${backendBaseUrl}/cases?${search.toString()}`, {
+  const url = `${backendBaseUrl}/cases?${search.toString()}`;
+  console.log("🌐 [fetchBackendCases] Fetching:", url);
+  
+  const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to load cases (${response.status})`);
+    const text = await response.text();
+    console.error("🚨 [fetchBackendCases] Response not OK:", response.status, text);
+    throw new Error(`Failed to load cases (${response.status}): ${text}`);
   }
 
-  return (await response.json()) as BackendCase[];
+  const data = (await response.json()) as BackendCase[];
+  console.log("📦 [fetchBackendCases] Got", data.length, "records");
+  return data;
 }
 
 export async function fetchBackendCasesOnce(token: string) {
