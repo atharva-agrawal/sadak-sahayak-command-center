@@ -12,6 +12,7 @@ import {
   Sun,
   Moon,
   X,
+  Navigation,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
@@ -59,6 +60,7 @@ export function Layout() {
   const getPageTitle = () => {
     if (location.pathname === "/") return "Command Centre Overview";
     if (location.pathname === "/cases") return "Violation Cases Database";
+    if (location.pathname === "/atms") return "Autonomous Traffic Management";
     return "Dashboard";
   };
 
@@ -92,6 +94,7 @@ export function Layout() {
         <div className="flex w-full flex-1 flex-col gap-4 px-3">
           <NavItem to="/" icon={<LayoutDashboard />} label="Dashboard" />
           <NavItem to="/cases" icon={<FileText />} label="Cases" />
+          <NavItem to="/atms" icon={<Navigation />} label="ATMS" />
         </div>
 
         <div className="mt-auto flex w-full flex-col gap-4 px-3">
