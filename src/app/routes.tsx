@@ -5,6 +5,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { CasesManagement } from "./pages/CasesManagement";
 import { RevenueDashboard } from "./pages/RevenueDashboard";
 import { LoginPage } from "./pages/LoginPage";
+import { AtmsDashboard } from "./pages/AtmsDashboard";
 
 const azureAuthEnabled = Boolean(
   import.meta.env.VITE_AZURE_CLIENT_ID && import.meta.env.VITE_AZURE_TENANT_ID,
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
       { index: true, Component: Dashboard },
       { path: "cases", Component: CasesManagement },
       { path: "revenue", Component: RevenueDashboard },
+      { path: "atms", Component: AtmsDashboard },
     ],
   },
 ]);
