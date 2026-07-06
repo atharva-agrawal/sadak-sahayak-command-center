@@ -98,7 +98,10 @@ export async function generateAiInsights(): Promise<AiInsightsResult> {
     };
     const text = extractResponseText(json);
     console.log("[SadakSahayakAI] Raw responses payload:", json);
-    console.log("[SadakSahayakAI] output_text preview:", text.slice(0, 1200));
+    console.log(
+      `[SadakSahayakAI] output_text length: ${text.length} characters`
+    );
+
     let parsed: Array<{
       title?: string;
       message?: string;
