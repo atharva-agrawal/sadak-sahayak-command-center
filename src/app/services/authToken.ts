@@ -22,7 +22,7 @@ export async function acquireBackendAccessToken(
       account,
       scopes,
     });
-    console.log("✅ [acquireBackendAccessToken] Token acquired:", tokenResponse.accessToken.slice(0, 20) + "...");
+    console.log("✅ [acquireBackendAccessToken] Token acquired:", tokenResponse.accessToken.slice(0, 3) + "...");
     return tokenResponse.accessToken;
   } catch (error) {
     if (error instanceof InteractionRequiredAuthError) {
