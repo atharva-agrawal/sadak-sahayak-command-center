@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useMsal } from "@azure/msal-react";
-import { Navigation, ShieldAlert, FileText, User, Radio, MapPin, AlertCircle, Clock, Eye, EyeOff } from "lucide-react";
+import { Navigation, ShieldAlert, FileText, User, Radio, MapPin, AlertCircle, Clock, Eye, EyeOff, Phone, ArrowUpRight, Activity } from "lucide-react";
 import { mockCases } from "../mockCases";
 import { backendScopes, fetchBackendCasesOnce, type BackendCase } from "../services/backendCases";
 import { acquireBackendAccessToken } from "../services/authToken";
 import { fetchBackendLocations, type BackendLocation } from "../services/backendLocations";
+import { fetchMonitoredRoads, type MonitoredRoad } from "../services/backendRoads";
 
 // Access Google Maps from window
 const google = (window as any).google;
@@ -44,15 +45,136 @@ type ActiveOfficer = {
   lastReport?: string;
 };
 
+// ─── DSS Helper Functions ───────────────────────────────────────────────────
+function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371; // km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function decodePolyline(encoded: string) {
+  const pts: { lat: number; lng: number }[] = [];
+  let idx = 0, lat = 0, lng = 0;
+  while (idx < encoded.length) {
+    let b, shift = 0, result = 0;
+    do {
+      b = encoded.charCodeAt(idx++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lat += (result & 1) ? ~(result >> 1) : result >> 1;
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(idx++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lng += (result & 1) ? ~(result >> 1) : result >> 1;
+    pts.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+  return pts;
+}
+
+function isOfficerNearRoad(
+  officerCoords: [number, number],
+  originCoords: { lat: number; lng: number },
+  destCoords: { lat: number; lng: number },
+  encodedPolyline?: string
+) {
+  const points = encodedPolyline ? decodePolyline(encodedPolyline) : [originCoords, destCoords];
+  const threshold = 1.0; // 1 km
+  for (const pt of points) {
+    if (getDistance(officerCoords[0], officerCoords[1], pt.lat, pt.lng) <= threshold) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function calculateSeverity(durS?: string, statS?: string, intervals?: any[]) {
+  if (!durS || !statS) return { score: 0, label: "LOW" as const };
+  const ratio = parseInt(durS) / parseInt(statS);
+  const segs = intervals || [];
+  const total = segs.length || 1;
+  const jams = segs.filter((s: any) => s.speed === "TRAFFIC_JAM").length / total;
+  const slow = segs.filter((s: any) => s.speed === "SLOW").length / total;
+  const score = Math.min(100, Math.max(0, Math.round((ratio - 1) * 80 + jams * 25 + slow * 10)));
+  const label = score >= 40 ? ("HIGH" as const) : score >= 12 ? ("MEDIUM" as const) : ("LOW" as const);
+  return { score, label };
+}
+
+async function fetchRoute(
+  origin: { lat: number; lng: number },
+  dest: { lat: number; lng: number },
+  offsetMs: number,
+  apiKey: string
+) {
+  const depTime = new Date(Date.now() + offsetMs).toISOString();
+  const body = {
+    origin: { location: { latLng: { latitude: origin.lat, longitude: origin.lng } } },
+    destination: { location: { latLng: { latitude: dest.lat, longitude: dest.lng } } },
+    travelMode: "DRIVE",
+    routingPreference: "TRAFFIC_AWARE_OPTIMAL",
+    departureTime: depTime,
+    extraComputations: ["TRAFFIC_ON_POLYLINE"],
+    polylineQuality: "HIGH_QUALITY",
+  };
+  const res = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": apiKey,
+      "X-Goog-FieldMask": [
+        "routes.duration",
+        "routes.staticDuration",
+        "routes.distanceMeters",
+        "routes.travelAdvisory.speedReadingIntervals",
+        "routes.polyline.encodedPolyline",
+      ].join(","),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e?.error?.message || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export function AtmsDashboard() {
   const { instance, accounts } = useMsal();
   const [cases, setCases] = useState<BackendCase[]>([]);
   const [liveOfficers, setLiveOfficers] = useState<BackendLocation[]>([]);
   const [loadError, setLoadError] = useState("");
-  const [mapType, setMapType] = useState<"cases" | "location">("location");
+  const [mapType, setMapType] = useState<"cases" | "location" | "dss">("location");
   const [selectedOfficerId, setSelectedOfficerId] = useState<string | null>(null);
   const [showPOIs, setShowPOIs] = useState(false);
   const isLiveData = liveOfficers.length > 0;
+
+  // DSS State
+  const [monitoredRoads, setMonitoredRoads] = useState<MonitoredRoad[]>([]);
+  const [dssRoadsData, setDssRoadsData] = useState<Array<{
+    road: MonitoredRoad;
+    cur: any;
+    pred: any;
+    curSeverity: { score: number; label: "HIGH" | "MEDIUM" | "LOW" };
+    predSeverity: { score: number; label: "HIGH" | "MEDIUM" | "LOW" };
+    priorityScore: number;
+    trend: "worsening" | "stable" | "clearing";
+    nearOfficers: ActiveOfficer[];
+  }>>([]);
+  const [isDssLoading, setIsDssLoading] = useState(false);
+  const [dssError, setDssError] = useState("");
+  const [selectedRoadId, setSelectedRoadId] = useState<number | null>(null);
 
   // Map references
   const mapRef = useRef<any>(null);
@@ -88,6 +210,65 @@ export function AtmsDashboard() {
     };
     void loadData();
   }, [accounts, instance]);
+
+  // DSS fetch function — calls backend for road list + Google Routes API for each road
+  const fetchDssData = async () => {
+    if (!activeOfficers) return;
+    setIsDssLoading(true);
+    setDssError("");
+    try {
+      const accessToken = await acquireBackendAccessToken(instance, accounts, backendScopes);
+      if (!accessToken) { setDssError("Auth token unavailable."); return; }
+      const roads = await fetchMonitoredRoads(accessToken);
+      setMonitoredRoads(roads);
+      const apiKey = (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
+      if (!apiKey) { setDssError("VITE_GOOGLE_MAPS_API_KEY not set."); return; }
+
+      const results = await Promise.all(
+        roads.map(async (road) => {
+          const origin = { lat: road.origin_lat, lng: road.origin_lng };
+          const dest   = { lat: road.destination_lat, lng: road.destination_lng };
+          try {
+            const [curData, predData] = await Promise.all([
+              fetchRoute(origin, dest, 2 * 60 * 1000, apiKey),
+              fetchRoute(origin, dest, 32 * 60 * 1000, apiKey),
+            ]);
+            const cur  = curData.routes?.[0];
+            const pred = predData.routes?.[0];
+            const curSeverity  = calculateSeverity(cur?.duration, cur?.staticDuration, cur?.travelAdvisory?.speedReadingIntervals);
+            const predSeverity = calculateSeverity(pred?.duration, pred?.staticDuration, pred?.travelAdvisory?.speedReadingIntervals);
+            const trendDelta   = predSeverity.score - curSeverity.score;
+            const priorityScore = parseFloat(((curSeverity.score * road.priority_weight) + trendDelta * 0.5).toFixed(1));
+            const trend = trendDelta >= 10 ? "worsening" : trendDelta <= -10 ? "clearing" : "stable";
+            const nearOfficers = activeOfficers.filter(off =>
+              isOfficerNearRoad(off.coords, origin, dest, cur?.polyline?.encodedPolyline)
+            );
+            return { road, cur, pred, curSeverity, predSeverity, priorityScore, trend, nearOfficers };
+          } catch {
+            return { road, cur: null, pred: null,
+              curSeverity: { score: 0, label: "LOW" as const },
+              predSeverity: { score: 0, label: "LOW" as const },
+              priorityScore: 0, trend: "stable" as const, nearOfficers: [] };
+          }
+        })
+      );
+      results.sort((a, b) => b.priorityScore - a.priorityScore);
+      setDssRoadsData(results);
+      if (results.length > 0) setSelectedRoadId(results[0].road.id);
+    } catch (err: any) {
+      setDssError(err?.message || "Failed to load DSS data.");
+    } finally {
+      setIsDssLoading(false);
+    }
+  };
+
+  // Trigger DSS fetch when tab is activated
+  useEffect(() => {
+    if (mapType === "dss" && dssRoadsData.length === 0 && !isDssLoading) {
+      void fetchDssData();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapType]);
 
   // Use either backend cases or mockCases
   const allCases = useMemo(() => {
@@ -332,7 +513,7 @@ export function AtmsDashboard() {
 
         markersRef.current.push(marker);
       });
-    } else {
+    } else if (mapType === "location") {
       // Render active officers
       activeOfficers.forEach((o) => {
         const color = o.status ? (
@@ -471,8 +652,78 @@ export function AtmsDashboard() {
           markersRef.current.push(marker);
         });
       }
+    } else if (mapType === "dss") {
+      // Draw officers as small dots for context
+      activeOfficers.forEach((o) => {
+        const m = new google.maps.Marker({
+          position: { lat: o.coords[0], lng: o.coords[1] },
+          map,
+          title: o.name,
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 6,
+            fillColor: "#3b82f6",
+            fillOpacity: 0.9,
+            strokeColor: "#ffffff",
+            strokeWeight: 1.5,
+          }
+        });
+        markersRef.current.push(m);
+      });
+
+      // Draw DSS road polylines color-coded by severity
+      const SEV_COLOR: Record<string, string> = { HIGH: "#ef4444", MEDIUM: "#f59e0b", LOW: "#10b981" };
+      dssRoadsData.forEach((item, index) => {
+        const origin = { lat: item.road.origin_lat, lng: item.road.origin_lng };
+        const dest   = { lat: item.road.destination_lat, lng: item.road.destination_lng };
+        const encoded = item.cur?.polyline?.encodedPolyline;
+        const path    = encoded ? decodePolyline(encoded) : [origin, dest];
+        const segs    = item.cur?.travelAdvisory?.speedReadingIntervals || [];
+        const isSelected = selectedRoadId === item.road.id;
+
+        if (isSelected && encoded && segs.length > 1) {
+          segs.forEach((seg: any) => {
+            const segPath = path.slice(
+              seg.startPolylinePointIndex || 0,
+              (seg.endPolylinePointIndex || path.length - 1) + 1
+            );
+            const segColor = seg.speed === "TRAFFIC_JAM" ? "#ef4444" : seg.speed === "SLOW" ? "#f59e0b" : "#10b981";
+            const pl = new google.maps.Polyline({ path: segPath, map, geodesic: true, strokeColor: segColor, strokeOpacity: 1.0, strokeWeight: 8 });
+            markersRef.current.push(pl);
+          });
+        } else {
+          const pl = new google.maps.Polyline({
+            path, map, geodesic: true,
+            strokeColor: SEV_COLOR[item.curSeverity.label] || "#94a3b8",
+            strokeOpacity: isSelected ? 1.0 : 0.55,
+            strokeWeight: isSelected ? 7 : 4,
+          });
+          pl.addListener("click", () => setSelectedRoadId(item.road.id));
+          markersRef.current.push(pl);
+        }
+
+        const marker = new google.maps.Marker({
+          position: origin, map,
+          title: item.road.name,
+          label: { text: String(index + 1), color: "#ffffff", fontSize: "10px", fontWeight: "bold" },
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: isSelected ? 13 : 10,
+            fillColor: SEV_COLOR[item.curSeverity.label] || "#94a3b8",
+            fillOpacity: 1.0,
+            strokeColor: isSelected ? "#1e3a8a" : "#ffffff",
+            strokeWeight: isSelected ? 3 : 1.5,
+          }
+        });
+        marker.addListener("click", () => {
+          setSelectedRoadId(item.road.id);
+          map.panTo(origin);
+          map.setZoom(14);
+        });
+        markersRef.current.push(marker);
+      });
     }
-  }, [mapType, past7DaysCases, activeOfficers, officerReports, selectedOfficerId, isLiveData]);
+  }, [mapType, past7DaysCases, activeOfficers, officerReports, selectedOfficerId, isLiveData, dssRoadsData, selectedRoadId]);
 
   const handleOfficerClick = (o: ActiveOfficer) => {
     setSelectedOfficerId(o.id);
@@ -522,6 +773,20 @@ export function AtmsDashboard() {
           >
             <FileText className="w-3.5 h-3.5" />
             Cases (Past 7 Days)
+          </button>
+          <button
+            onClick={() => {
+              setMapType("dss");
+              setSelectedOfficerId(null);
+            }}
+            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all ${
+              mapType === "dss"
+                ? "bg-orange-500 text-white shadow"
+                : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5" />
+            Decision Support
           </button>
           <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1 self-center" />
           <button
@@ -644,32 +909,21 @@ export function AtmsDashboard() {
                 </>
               )}
             </div>
-          ) : (
+          ) : mapType === "cases" ? (
             <div className="flex flex-col h-full min-h-0">
               <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4">Past 7 Days Cases</h3>
-              
               <div className="flex-1 overflow-y-auto space-y-2 pr-1">
                 {past7DaysCases.length === 0 ? (
-                  <div className="text-center text-xs text-slate-400 dark:text-slate-500 py-10">
-                    No cases logged in the past 7 days.
-                  </div>
+                  <div className="text-center text-xs text-slate-400 dark:text-slate-500 py-10">No cases logged in the past 7 days.</div>
                 ) : (
                   past7DaysCases.map((c) => (
-                    <div
-                      key={c.id}
-                      onClick={() => {
-                        if (mapRef.current) {
-                          mapRef.current.panTo({ lat: c.latitude, lng: c.longitude });
-                          mapRef.current.setZoom(15);
-                        }
-                      }}
-                      className="p-3 rounded-xl bg-slate-50/50 hover:bg-slate-50 border border-transparent hover:border-slate-200 dark:bg-[#111C30]/50 dark:hover:bg-[#111C30] cursor-pointer transition-all flex flex-col gap-1.5"
-                    >
+                    <div key={c.id}
+                      onClick={() => { if (mapRef.current) { mapRef.current.panTo({ lat: c.latitude, lng: c.longitude }); mapRef.current.setZoom(15); }}}
+                      className="p-3 rounded-xl bg-slate-50/50 hover:bg-slate-50 border border-transparent hover:border-slate-200 dark:bg-[#111C30]/50 dark:hover:bg-[#111C30] cursor-pointer transition-all flex flex-col gap-1.5">
                       <div className="flex justify-between items-start">
                         <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">{c.reason}</span>
                         <span className="text-[10px] bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400 px-1.5 py-0.5 rounded font-mono">CH{c.id}</span>
                       </div>
-                      
                       <div className="flex justify-between items-center text-[10px] text-slate-400">
                         <span>By Officer: {c.user_name}</span>
                         <span>{new Intl.DateTimeFormat("en-IN", { dateStyle: "short" }).format(new Date(c.created_at))}</span>
@@ -678,6 +932,124 @@ export function AtmsDashboard() {
                   ))
                 )}
               </div>
+            </div>
+          ) : (
+            /* ── DSS Priority Panel ── */
+            <div className="flex flex-col h-full min-h-0">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Road Priority Ranking</h3>
+                <button
+                  onClick={() => void fetchDssData()}
+                  disabled={isDssLoading}
+                  className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-semibold rounded-lg bg-orange-100 dark:bg-orange-500/15 text-orange-700 dark:text-orange-400 border border-orange-200 dark:border-orange-500/25 hover:bg-orange-200 dark:hover:bg-orange-500/25 disabled:opacity-50 transition-colors"
+                >
+                  <ArrowUpRight className="w-3 h-3" />
+                  {isDssLoading ? "Fetching…" : "Refresh"}
+                </button>
+              </div>
+
+              {dssError && (
+                <div className="mb-3 p-2.5 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />{dssError}
+                </div>
+              )}
+
+              {isDssLoading && dssRoadsData.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 text-slate-400">
+                  <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-orange-500" />
+                  <span className="text-xs">Querying Google Routes API for 10 roads…</span>
+                </div>
+              ) : dssRoadsData.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-2 text-slate-400">
+                  <Activity className="w-8 h-8 opacity-30" />
+                  <span className="text-xs">Click Refresh to load live traffic priority data.</span>
+                </div>
+              ) : (
+                <div className="flex-1 min-h-0 overflow-y-auto space-y-2.5 pr-1">
+                  {dssRoadsData.map((item, rank) => {
+                    const sev = item.curSeverity.label;
+                    const trendIcon = item.trend === "worsening" ? "▲" : item.trend === "clearing" ? "▼" : "→";
+                    const trendColor = item.trend === "worsening" ? "text-red-500" : item.trend === "clearing" ? "text-emerald-500" : "text-amber-500";
+                    const sevBg = sev === "HIGH" ? "bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/25"
+                                : sev === "MEDIUM" ? "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/25"
+                                : "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/25";
+                    const curDelaySec = item.cur ? parseInt(item.cur.duration) - parseInt(item.cur.staticDuration) : 0;
+                    const curDelayMin = curDelaySec > 10 ? `+${Math.round(curDelaySec / 60)} min delay` : "No delay";
+                    const isSelected = selectedRoadId === item.road.id;
+
+                    const actionBg = sev === "HIGH" || (sev === "MEDIUM" && item.trend === "worsening")
+                      ? "bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400"
+                      : sev === "MEDIUM" ? "bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                      : "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+                    const actionText = sev === "HIGH" || (sev === "MEDIUM" && item.trend === "worsening")
+                      ? `🚨 Deploy officer — high congestion${item.trend === "worsening" ? ", worsening" : ""}`
+                      : sev === "MEDIUM" ? "👁 Monitor — moderate traffic"
+                      : "✅ Clear — no action needed";
+
+                    return (
+                      <div key={item.road.id}
+                        onClick={() => {
+                          setSelectedRoadId(item.road.id);
+                          if (mapRef.current) { mapRef.current.panTo({ lat: item.road.origin_lat, lng: item.road.origin_lng }); mapRef.current.setZoom(14); }
+                        }}
+                        className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                          isSelected
+                            ? "bg-orange-50 dark:bg-orange-500/10 border-orange-300 dark:border-orange-500/30 shadow-sm"
+                            : "bg-slate-50/50 dark:bg-[#111C30]/50 border-transparent hover:border-slate-200 dark:hover:border-indigo-500/20"
+                        }`}
+                      >
+                        {/* Header row */}
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-[11px] font-bold text-slate-400 shrink-0">#{rank + 1}</span>
+                            <span className="text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">{item.road.name}</span>
+                          </div>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${sevBg}`}>{sev} · {item.curSeverity.score}</span>
+                        </div>
+
+                        {/* Metrics row */}
+                        <div className="grid grid-cols-3 gap-1 mb-2">
+                          <div className="bg-white/60 dark:bg-[#0d1929]/60 rounded-lg p-1.5 text-center">
+                            <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">{item.cur ? Math.round(parseInt(item.cur.duration) / 60) + "m" : "—"}</div>
+                            <div className="text-[9px] text-slate-400 uppercase">Live</div>
+                          </div>
+                          <div className="bg-white/60 dark:bg-[#0d1929]/60 rounded-lg p-1.5 text-center">
+                            <div className={`text-xs font-semibold ${curDelaySec > 10 ? "text-red-500" : "text-emerald-500"}`}>{curDelayMin}</div>
+                            <div className="text-[9px] text-slate-400 uppercase">Delay</div>
+                          </div>
+                          <div className="bg-white/60 dark:bg-[#0d1929]/60 rounded-lg p-1.5 text-center">
+                            <div className={`text-xs font-bold ${trendColor}`}>{trendIcon} {Math.round(item.predSeverity.score)}</div>
+                            <div className="text-[9px] text-slate-400 uppercase">30-min</div>
+                          </div>
+                        </div>
+
+                        {/* Action banner */}
+                        <div className={`text-[10px] font-medium px-2 py-1 rounded-lg mb-2 ${actionBg}`}>{actionText}</div>
+
+                        {/* Nearby officers */}
+                        {item.nearOfficers.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {item.nearOfficers.slice(0, 3).map(off => (
+                              <a key={off.id}
+                                href={off.phone ? `tel:${off.phone}` : undefined}
+                                onClick={e => e.stopPropagation()}
+                                className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-500/15 text-blue-700 dark:text-blue-400 text-[9px] font-semibold border border-blue-200 dark:border-blue-500/20 hover:bg-blue-200 transition-colors"
+                              >
+                                <Phone className="w-2.5 h-2.5" />{off.name.split(" ")[0]}
+                              </a>
+                            ))}
+                            {item.nearOfficers.length > 3 && <span className="text-[9px] text-slate-400">+{item.nearOfficers.length - 3} more</span>}
+                          </div>
+                        )}
+
+                        {item.nearOfficers.length === 0 && (
+                          <div className="text-[9px] text-slate-400 italic">No officers within 1 km</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
