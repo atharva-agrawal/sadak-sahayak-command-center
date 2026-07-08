@@ -8,10 +8,10 @@ export function LiveFeed({ cases }: { cases: BackendCase[] }) {
 
   const recent = [...cases]
     .sort((left, right) => right.timestamp - left.timestamp)
-    .slice(0, 10);
+    .slice(0, 5);
 
   return (
-    <div className="bg-white/60 dark:bg-[#0A1222]/60 backdrop-blur-md rounded-2xl p-5 border border-slate-200 dark:border-indigo-500/10 shadow-lg flex flex-col h-full">
+    <div className="bg-white/60 dark:bg-[#0A1222]/60 backdrop-blur-md rounded-2xl p-5 border border-slate-200 dark:border-indigo-500/10 shadow-lg flex flex-col h-full overflow-hidden">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider flex items-center gap-2">
           <span className="relative flex h-2 w-2">
@@ -25,7 +25,7 @@ export function LiveFeed({ cases }: { cases: BackendCase[] }) {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto space-y-3 pr-2">
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-2">
         {recent.map((item, index) => (
           <motion.div
             initial={{ opacity: 0, x: 20 }}
