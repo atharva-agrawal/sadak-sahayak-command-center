@@ -1,4 +1,5 @@
 import { mockCases, type ViolationCase } from "../mockCases";
+import type { BackendCase } from "./backendCases";
 
 export type AiInsightSeverity = "high" | "medium" | "low";
 
@@ -40,16 +41,23 @@ const FALLBACK_INSIGHTS: AiInsight[] = [
   },
 ];
 
-export async function generateAiInsights(): Promise<AiInsightsResult> {
+export async function generateAiInsights(liveCases?: BackendCase[]): Promise<AiInsightsResult> {
   const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
   if (!apiKey) {
     console.info("[SadakSahayakAI] No VITE_OPENAI_API_KEY found. Using static fallback insights.");
     return { insights: FALLBACK_INSIGHTS, source: "fallback", reason: "Missing API key" };
   }
 
-  const recentCases = [...mockCases]
-    .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
-    .slice(0, 6)
+  // Prefer live backend cases; only fall back to mock if none are available
+  const sourceCases: Array<ViolationCase | BackendCase> =
+    liveCases && liveCases.length > 0 ? liveCases : mockCases;
+
+  const dataSource = liveCases && liveCases.length > 0 ? "live backend" : "mock";
+  console.info(`[SadakSahayakAI] Using ${dataSource} data (${sourceCases.length} cases) for insight generation.`);
+
+  const recentCases = [...sourceCases]
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 8)
     .map((item) => compactCase(item));
 
   const prompt = [
@@ -152,15 +160,17 @@ export async function generateAiInsights(): Promise<AiInsightsResult> {
   }
 }
 
-function compactCase(item: ViolationCase) {
+function compactCase(item: ViolationCase | BackendCase) {
   return {
     id: item.id,
     officer: item.user_name,
     violation: item.reason,
-    severity: item.severity,
-    status: item.status,
-    location: item.location,
+    // severity/status/location only exist on ViolationCase (mock), not BackendCase
+    severity: (item as ViolationCase).severity ?? null,
+    status: (item as ViolationCase).status ?? null,
+    location: (item as ViolationCase).location ?? null,
     createdAt: item.created_at,
+    notes: (item as BackendCase).notes ?? null,
   };
 }
 
