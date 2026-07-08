@@ -6,6 +6,7 @@ import { CasesManagement } from "./pages/CasesManagement";
 import { RevenueDashboard } from "./pages/RevenueDashboard";
 import { LoginPage } from "./pages/LoginPage";
 import { AtmsDashboard } from "./pages/AtmsDashboard";
+import { CasesProvider } from "./CasesContext";
 
 const azureAuthEnabled = Boolean(
   import.meta.env.VITE_AZURE_CLIENT_ID && import.meta.env.VITE_AZURE_TENANT_ID,
@@ -37,7 +38,11 @@ function LoginRoute() {
 
 function ProtectedLayout() {
   if (!azureAuthEnabled) {
-    return <Layout />;
+    return (
+      <CasesProvider>
+        <Layout />
+      </CasesProvider>
+    );
   }
 
   const { inProgress } = useMsal();
@@ -53,7 +58,9 @@ function ProtectedLayout() {
   return (
     <>
       <AuthenticatedTemplate>
-        <Layout />
+        <CasesProvider>
+          <Layout />
+        </CasesProvider>
       </AuthenticatedTemplate>
       <UnauthenticatedTemplate>
         <Navigate to="/login" replace />
