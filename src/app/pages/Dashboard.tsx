@@ -17,6 +17,7 @@ import { useMsal } from "@azure/msal-react";
 import { MapWidget } from "../components/MapWidget";
 import { LiveFeed } from "../components/LiveFeed";
 import { AiInsights } from "../components/AiInsights";
+import { OfficerQueries } from "../components/OfficerQueries";
 import { Shield, Users, Activity } from "lucide-react";
 import { backendScopes, fetchBackendCasesOnce, type BackendCase } from "../services/backendCases";
 import { acquireBackendAccessToken } from "../services/authToken";
@@ -208,8 +209,8 @@ export function Dashboard() {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 h-[450px] lg:grid-cols-3">
-        <div className="lg:col-span-2 bg-white/60 dark:bg-[#0A1222]/60 backdrop-blur-md rounded-2xl border border-slate-200 dark:border-indigo-500/10 shadow-lg flex flex-col overflow-hidden">
+      <div className="grid grid-cols-1 gap-6 lg:h-[450px] lg:grid-cols-3">
+        <div className="lg:col-span-2 h-[350px] lg:h-full bg-white/60 dark:bg-[#0A1222]/60 backdrop-blur-md rounded-2xl border border-slate-200 dark:border-indigo-500/10 shadow-lg flex flex-col overflow-hidden">
           <div className="p-5 border-b border-slate-200 dark:border-indigo-500/10 flex justify-between items-center bg-slate-50/40 dark:bg-[#050B14]/40">
             <div>
               <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100 uppercase tracking-wider">Geographic Hotspots</h3>
@@ -225,8 +226,13 @@ export function Dashboard() {
           </div>
         </div>
 
-        <div className="lg:col-span-1">
-          <LiveFeed cases={cases} />
+        <div className="lg:col-span-1 flex flex-col gap-6 h-auto lg:h-[450px] overflow-hidden">
+          <div className="h-[220px] lg:h-[213px] overflow-hidden shrink-0">
+            <LiveFeed cases={cases} />
+          </div>
+          <div className="h-[220px] lg:h-[213px] overflow-hidden shrink-0">
+            <OfficerQueries />
+          </div>
         </div>
       </div>
 
