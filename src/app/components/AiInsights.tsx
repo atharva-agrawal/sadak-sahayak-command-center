@@ -2,20 +2,24 @@ import { BrainCircuit, TrendingUp, AlertOctagon } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { generateAiInsights, type AiInsight } from "../services/aiInsights";
+import { useCases } from "../CasesContext";
 
 export function AiInsights() {
+  const { cases, isLoading } = useCases();
   const [insights, setInsights] = useState<AiInsight[]>([]);
 
   useEffect(() => {
+    // Wait until cases have loaded before generating insights
+    if (isLoading) return;
     let isMounted = true;
-    generateAiInsights().then((result) => {
+    generateAiInsights(cases.length > 0 ? cases : undefined).then((result) => {
       if (!isMounted) return;
       setInsights(result.insights);
     });
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [cases, isLoading]);
 
   return (
     <div className="bg-gradient-to-br from-indigo-50 to-blue-50 dark:from-[#0A1222] dark:to-[#111A30] rounded-2xl p-5 border border-slate-200 dark:border-indigo-500/20 shadow-lg relative overflow-hidden h-full flex flex-col">
