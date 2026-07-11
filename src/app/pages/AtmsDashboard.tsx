@@ -46,20 +46,6 @@ type ActiveOfficer = {
 };
 
 // ─── DSS Helper Functions ───────────────────────────────────────────────────
-function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6371; // km
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
-
 function decodePolyline(encoded: string) {
   const pts: { lat: number; lng: number }[] = [];
   let idx = 0, lat = 0, lng = 0;
@@ -82,22 +68,6 @@ function decodePolyline(encoded: string) {
     pts.push({ lat: lat / 1e5, lng: lng / 1e5 });
   }
   return pts;
-}
-
-function isOfficerNearRoad(
-  officerCoords: [number, number],
-  originCoords: { lat: number; lng: number },
-  destCoords: { lat: number; lng: number },
-  encodedPolyline?: string
-) {
-  const points = encodedPolyline ? decodePolyline(encodedPolyline) : [originCoords, destCoords];
-  const threshold = 1.0; // 1 km
-  for (const pt of points) {
-    if (getDistance(officerCoords[0], officerCoords[1], pt.lat, pt.lng) <= threshold) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function calculateSeverity(durS?: string, statS?: string, intervals?: any[]) {
@@ -168,13 +138,14 @@ export function AtmsDashboard() {
     pred: any;
     curSeverity: { score: number; label: "HIGH" | "MEDIUM" | "LOW" };
     predSeverity: { score: number; label: "HIGH" | "MEDIUM" | "LOW" };
-    priorityScore: number;
+    curPriorityScore: number;
+    predPriorityScore: number;
     trend: "worsening" | "stable" | "clearing";
-    nearOfficers: ActiveOfficer[];
   }>>([]);
   const [isDssLoading, setIsDssLoading] = useState(false);
   const [dssError, setDssError] = useState("");
   const [selectedRoadId, setSelectedRoadId] = useState<number | null>(null);
+  const [dssSubTab, setDssSubTab] = useState<"current" | "predicted">("current");
 
   // Map references
   const mapRef = useRef<any>(null);
@@ -213,7 +184,6 @@ export function AtmsDashboard() {
 
   // DSS fetch function — calls backend for road list + Google Routes API for each road
   const fetchDssData = async () => {
-    if (!activeOfficers) return;
     setIsDssLoading(true);
     setDssError("");
     try {
@@ -238,21 +208,18 @@ export function AtmsDashboard() {
             const curSeverity  = calculateSeverity(cur?.duration, cur?.staticDuration, cur?.travelAdvisory?.speedReadingIntervals);
             const predSeverity = calculateSeverity(pred?.duration, pred?.staticDuration, pred?.travelAdvisory?.speedReadingIntervals);
             const trendDelta   = predSeverity.score - curSeverity.score;
-            const priorityScore = parseFloat(((curSeverity.score * road.priority_weight) + trendDelta * 0.5).toFixed(1));
+            const curPriorityScore = parseFloat((curSeverity.score * road.priority_weight).toFixed(1));
+            const predPriorityScore = parseFloat((predSeverity.score * road.priority_weight).toFixed(1));
             const trend = trendDelta >= 10 ? "worsening" : trendDelta <= -10 ? "clearing" : "stable";
-            const nearOfficers = activeOfficers.filter(off =>
-              isOfficerNearRoad(off.coords, origin, dest, cur?.polyline?.encodedPolyline)
-            );
-            return { road, cur, pred, curSeverity, predSeverity, priorityScore, trend, nearOfficers };
+            return { road, cur, pred, curSeverity, predSeverity, curPriorityScore, predPriorityScore, trend };
           } catch {
             return { road, cur: null, pred: null,
               curSeverity: { score: 0, label: "LOW" as const },
               predSeverity: { score: 0, label: "LOW" as const },
-              priorityScore: 0, trend: "stable" as const, nearOfficers: [] };
+              curPriorityScore: 0, predPriorityScore: 0, trend: "stable" as const };
           }
         })
       );
-      results.sort((a, b) => b.priorityScore - a.priorityScore);
       setDssRoadsData(results);
       if (results.length > 0) setSelectedRoadId(results[0].road.id);
     } catch (err: any) {
@@ -269,6 +236,16 @@ export function AtmsDashboard() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapType]);
+
+  // Dynamically sort roads based on current/prediction sub-tab selection
+  const sortedDssRoads = useMemo(() => {
+    const data = [...dssRoadsData];
+    if (dssSubTab === "current") {
+      return data.sort((a, b) => b.curPriorityScore - a.curPriorityScore);
+    } else {
+      return data.sort((a, b) => b.predPriorityScore - a.predPriorityScore);
+    }
+  }, [dssRoadsData, dssSubTab]);
 
   // Use either backend cases or mockCases
   const allCases = useMemo(() => {
@@ -349,12 +326,26 @@ export function AtmsDashboard() {
   // 3. Combine live or mock officers
   const activeOfficers = useMemo<ActiveOfficer[]>(() => {
     if (liveOfficers.length > 0) {
-      return liveOfficers.map(lo => ({
-        id: lo.user_id,
-        name: lo.user_name ?? "Unknown Officer",
-        coords: [lo.latitude, lo.longitude],
-        recordedAt: lo.recorded_at,
-      }));
+      // Build a userId → name lookup from already-fetched cases (no extra API call)
+      const nameFromCases: Record<string, string> = {};
+      for (const c of cases) {
+        if (c.user_id && c.user_name && !nameFromCases[c.user_id]) {
+          nameFromCases[c.user_id] = c.user_name;
+        }
+      }
+
+      return liveOfficers.map(lo => {
+        const resolvedName =
+          (lo.user_name && lo.user_name.trim() !== "" && lo.user_name.toLowerCase() !== "unknown officer")
+            ? lo.user_name
+            : (nameFromCases[lo.user_id] ?? `Officer ${lo.user_id.slice(0, 6)}`);
+        return {
+          id: lo.user_id,
+          name: resolvedName,
+          coords: [lo.latitude, lo.longitude],
+          recordedAt: lo.recorded_at,
+        };
+      });
     }
     
     return mockOfficers.map(mo => ({
@@ -369,7 +360,7 @@ export function AtmsDashboard() {
       phone: mo.phone,
       lastReport: mo.lastReport,
     }));
-  }, [liveOfficers, mockOfficers]);
+  }, [liveOfficers, mockOfficers, cases]);
 
   // 4. Mock Officer Reports
   const officerReports = useMemo<OfficerReport[]>(() => [
@@ -673,7 +664,7 @@ export function AtmsDashboard() {
 
       // Draw DSS road polylines color-coded by severity
       const SEV_COLOR: Record<string, string> = { HIGH: "#ef4444", MEDIUM: "#f59e0b", LOW: "#10b981" };
-      dssRoadsData.forEach((item, index) => {
+      sortedDssRoads.forEach((item, index) => {
         const origin = { lat: item.road.origin_lat, lng: item.road.origin_lng };
         const dest   = { lat: item.road.destination_lat, lng: item.road.destination_lng };
         const encoded = item.cur?.polyline?.encodedPolyline;
@@ -723,7 +714,7 @@ export function AtmsDashboard() {
         markersRef.current.push(marker);
       });
     }
-  }, [mapType, past7DaysCases, activeOfficers, officerReports, selectedOfficerId, isLiveData, dssRoadsData, selectedRoadId]);
+  }, [mapType, past7DaysCases, activeOfficers, officerReports, selectedOfficerId, isLiveData, sortedDssRoads, selectedRoadId]);
 
   const handleOfficerClick = (o: ActiveOfficer) => {
     setSelectedOfficerId(o.id);
@@ -936,8 +927,34 @@ export function AtmsDashboard() {
           ) : (
             /* ── DSS Priority Panel ── */
             <div className="flex flex-col h-full min-h-0">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Road Priority Ranking</h3>
+              {/* Sub-tabs Selection */}
+              <div className="flex bg-slate-100 dark:bg-[#111C30] p-1 rounded-xl mb-4 border border-slate-200/50 dark:border-indigo-500/10 shrink-0">
+                <button
+                  onClick={() => setDssSubTab("current")}
+                  className={`flex-1 py-1.5 text-center text-xs font-semibold rounded-lg transition-all ${
+                    dssSubTab === "current"
+                      ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow"
+                      : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
+                  }`}
+                >
+                  Current Traffic
+                </button>
+                <button
+                  onClick={() => setDssSubTab("predicted")}
+                  className={`flex-1 py-1.5 text-center text-xs font-semibold rounded-lg transition-all ${
+                    dssSubTab === "predicted"
+                      ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow"
+                      : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
+                  }`}
+                >
+                  30-Min Prediction
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between mb-3 shrink-0">
+                <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                  {dssSubTab === "current" ? "Current Traffic Ranking" : "Predicted Traffic Ranking"}
+                </h3>
                 <button
                   onClick={() => void fetchDssData()}
                   disabled={isDssLoading}
@@ -949,41 +966,57 @@ export function AtmsDashboard() {
               </div>
 
               {dssError && (
-                <div className="mb-3 p-2.5 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
+                <div className="mb-3 p-2.5 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-xs text-red-600 dark:text-red-400 flex items-center gap-2 shrink-0">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0" />{dssError}
                 </div>
               )}
 
-              {isDssLoading && dssRoadsData.length === 0 ? (
+              {isDssLoading && sortedDssRoads.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-3 text-slate-400">
                   <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-orange-500" />
                   <span className="text-xs">Querying Google Routes API for 10 roads…</span>
                 </div>
-              ) : dssRoadsData.length === 0 ? (
+              ) : sortedDssRoads.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-2 text-slate-400">
                   <Activity className="w-8 h-8 opacity-30" />
                   <span className="text-xs">Click Refresh to load live traffic priority data.</span>
                 </div>
               ) : (
                 <div className="flex-1 min-h-0 overflow-y-auto space-y-2.5 pr-1">
-                  {dssRoadsData.map((item, rank) => {
-                    const sev = item.curSeverity.label;
+                  {sortedDssRoads.map((item, rank) => {
+                    const isSelected = selectedRoadId === item.road.id;
                     const trendIcon = item.trend === "worsening" ? "▲" : item.trend === "clearing" ? "▼" : "→";
                     const trendColor = item.trend === "worsening" ? "text-red-500" : item.trend === "clearing" ? "text-emerald-500" : "text-amber-500";
-                    const sevBg = sev === "HIGH" ? "bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/25"
-                                : sev === "MEDIUM" ? "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/25"
-                                : "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/25";
-                    const curDelaySec = item.cur ? parseInt(item.cur.duration) - parseInt(item.cur.staticDuration) : 0;
-                    const curDelayMin = curDelaySec > 10 ? `+${Math.round(curDelaySec / 60)} min delay` : "No delay";
-                    const isSelected = selectedRoadId === item.road.id;
 
-                    const actionBg = sev === "HIGH" || (sev === "MEDIUM" && item.trend === "worsening")
+                    // Current Tab values
+                    const curSev = item.curSeverity.label;
+                    const curSevBg = curSev === "HIGH" ? "bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/25"
+                                  : curSev === "MEDIUM" ? "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/25"
+                                  : "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/25";
+                    const curDelaySec = item.cur ? Math.max(0, parseInt(item.cur.duration) - parseInt(item.cur.staticDuration)) : 0;
+                    const curDelayMin = curDelaySec > 10 ? `+${Math.round(curDelaySec / 60)} min` : "None";
+
+                    // Predicted Tab values
+                    const predSev = item.predSeverity.label;
+                    const predSevBg = predSev === "HIGH" ? "bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/25"
+                                  : predSev === "MEDIUM" ? "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/25"
+                                  : "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/25";
+                    const predDelaySec = item.pred ? Math.max(0, parseInt(item.pred.duration) - parseInt(item.pred.staticDuration)) : 0;
+                    const predDelayMin = predDelaySec > 10 ? `+${Math.round(predDelaySec / 60)} min` : "None";
+
+                    // Context dependent active fields
+                    const activeSev = dssSubTab === "current" ? curSev : predSev;
+                    const activeSevBg = dssSubTab === "current" ? curSevBg : predSevBg;
+                    const activeScore = dssSubTab === "current" ? item.curSeverity.score : item.predSeverity.score;
+                    const activePriority = dssSubTab === "current" ? item.curPriorityScore : item.predPriorityScore;
+
+                    const actionBg = activeSev === "HIGH" || (activeSev === "MEDIUM" && item.trend === "worsening")
                       ? "bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400"
-                      : sev === "MEDIUM" ? "bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                      : activeSev === "MEDIUM" ? "bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400"
                       : "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
-                    const actionText = sev === "HIGH" || (sev === "MEDIUM" && item.trend === "worsening")
+                    const actionText = activeSev === "HIGH" || (activeSev === "MEDIUM" && item.trend === "worsening")
                       ? `🚨 Deploy officer — high congestion${item.trend === "worsening" ? ", worsening" : ""}`
-                      : sev === "MEDIUM" ? "👁 Monitor — moderate traffic"
+                      : activeSev === "MEDIUM" ? "👁 Monitor — moderate traffic"
                       : "✅ Clear — no action needed";
 
                     return (
@@ -1004,47 +1037,52 @@ export function AtmsDashboard() {
                             <span className="text-[11px] font-bold text-slate-400 shrink-0">#{rank + 1}</span>
                             <span className="text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">{item.road.name}</span>
                           </div>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${sevBg}`}>{sev} · {item.curSeverity.score}</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${activeSevBg}`}>
+                            {activeSev} · {activeScore} (Pri: {activePriority})
+                          </span>
                         </div>
 
                         {/* Metrics row */}
-                        <div className="grid grid-cols-3 gap-1 mb-2">
-                          <div className="bg-white/60 dark:bg-[#0d1929]/60 rounded-lg p-1.5 text-center">
-                            <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">{item.cur ? Math.round(parseInt(item.cur.duration) / 60) + "m" : "—"}</div>
-                            <div className="text-[9px] text-slate-400 uppercase">Live</div>
+                        {dssSubTab === "current" ? (
+                          <div className="grid grid-cols-3 gap-1 mb-2">
+                            <div className="bg-white/60 dark:bg-[#0d1929]/60 rounded-lg p-1.5 text-center">
+                              <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">{item.cur ? Math.round(parseInt(item.cur.duration) / 60) + "m" : "—"}</div>
+                              <div className="text-[9px] text-slate-400 uppercase">Live</div>
+                            </div>
+                            <div className="bg-white/60 dark:bg-[#0d1929]/60 rounded-lg p-1.5 text-center">
+                              <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">{item.cur ? Math.round(parseInt(item.cur.staticDuration) / 60) + "m" : "—"}</div>
+                              <div className="text-[9px] text-slate-400 uppercase">Free flow</div>
+                            </div>
+                            <div className="bg-white/60 dark:bg-[#0d1929]/60 rounded-lg p-1.5 text-center">
+                              <div className={`text-xs font-semibold ${curDelaySec > 10 ? "text-red-500" : "text-emerald-500"}`}>{curDelayMin}</div>
+                              <div className="text-[9px] text-slate-400 uppercase">Delay</div>
+                            </div>
                           </div>
-                          <div className="bg-white/60 dark:bg-[#0d1929]/60 rounded-lg p-1.5 text-center">
-                            <div className={`text-xs font-semibold ${curDelaySec > 10 ? "text-red-500" : "text-emerald-500"}`}>{curDelayMin}</div>
-                            <div className="text-[9px] text-slate-400 uppercase">Delay</div>
+                        ) : (
+                          <div className="grid grid-cols-3 gap-1 mb-2">
+                            <div className="bg-white/60 dark:bg-[#0d1929]/60 rounded-lg p-1.5 text-center">
+                              <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">{item.pred ? Math.round(parseInt(item.pred.duration) / 60) + "m" : "—"}</div>
+                              <div className="text-[9px] text-slate-400 uppercase">Predicted</div>
+                            </div>
+                            <div className="bg-white/60 dark:bg-[#0d1929]/60 rounded-lg p-1.5 text-center">
+                              <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">{item.pred ? Math.round(parseInt(item.pred.staticDuration) / 60) + "m" : "—"}</div>
+                              <div className="text-[9px] text-slate-400 uppercase">Free flow</div>
+                            </div>
+                            <div className="bg-white/60 dark:bg-[#0d1929]/60 rounded-lg p-1.5 text-center">
+                              <div className={`text-xs font-semibold ${predDelaySec > 10 ? "text-red-500" : "text-emerald-500"}`}>{predDelayMin}</div>
+                              <div className="text-[9px] text-slate-400 uppercase">Pred Delay</div>
+                            </div>
                           </div>
-                          <div className="bg-white/60 dark:bg-[#0d1929]/60 rounded-lg p-1.5 text-center">
-                            <div className={`text-xs font-bold ${trendColor}`}>{trendIcon} {Math.round(item.predSeverity.score)}</div>
-                            <div className="text-[9px] text-slate-400 uppercase">30-min</div>
-                          </div>
+                        )}
+
+                        {/* Trend row */}
+                        <div className="flex justify-between items-center text-[10px] text-slate-500 dark:text-slate-400 px-1 mb-2">
+                          <span>Trend delta: <b className={trendColor}>{trendIcon} {item.trend}</b></span>
+                          <span className="text-[9px] text-slate-400">Weight: {item.road.priority_weight}x</span>
                         </div>
 
                         {/* Action banner */}
-                        <div className={`text-[10px] font-medium px-2 py-1 rounded-lg mb-2 ${actionBg}`}>{actionText}</div>
-
-                        {/* Nearby officers */}
-                        {item.nearOfficers.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {item.nearOfficers.slice(0, 3).map(off => (
-                              <a key={off.id}
-                                href={off.phone ? `tel:${off.phone}` : undefined}
-                                onClick={e => e.stopPropagation()}
-                                className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-500/15 text-blue-700 dark:text-blue-400 text-[9px] font-semibold border border-blue-200 dark:border-blue-500/20 hover:bg-blue-200 transition-colors"
-                              >
-                                <Phone className="w-2.5 h-2.5" />{off.name.split(" ")[0]}
-                              </a>
-                            ))}
-                            {item.nearOfficers.length > 3 && <span className="text-[9px] text-slate-400">+{item.nearOfficers.length - 3} more</span>}
-                          </div>
-                        )}
-
-                        {item.nearOfficers.length === 0 && (
-                          <div className="text-[9px] text-slate-400 italic">No officers within 1 km</div>
-                        )}
+                        <div className={`text-[10px] font-medium px-2 py-1 rounded-lg ${actionBg}`}>{actionText}</div>
                       </div>
                     );
                   })}
