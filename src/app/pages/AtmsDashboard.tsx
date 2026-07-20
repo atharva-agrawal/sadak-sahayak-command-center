@@ -229,10 +229,18 @@ export function AtmsDashboard() {
     }
   };
 
-  // Trigger DSS fetch when tab is activated
+  // Trigger DSS fetch when tab is activated & set up a 30-minute auto-refresh interval
   useEffect(() => {
-    if (mapType === "dss" && dssRoadsData.length === 0 && !isDssLoading) {
-      void fetchDssData();
+    if (mapType === "dss") {
+      if (dssRoadsData.length === 0 && !isDssLoading) {
+        void fetchDssData();
+      }
+
+      const interval = setInterval(() => {
+        void fetchDssData();
+      }, 30 * 60 * 1000); // 30 minutes in milliseconds
+
+      return () => clearInterval(interval);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapType]);
