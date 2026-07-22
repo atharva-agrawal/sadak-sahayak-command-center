@@ -128,8 +128,8 @@ export function CasesManagement() {
 
   const selectedCaseImages = selectedCase
     ? (selectedCase.images && selectedCase.images.length > 0
-        ? selectedCase.images.map((img) => img.image_url)
-        : caseImageMap[String(selectedCase.id)] ?? [])
+      ? selectedCase.images.map((img) => img.image_url)
+      : caseImageMap[String(selectedCase.id)] ?? [])
     : [];
 
   return (
@@ -141,7 +141,7 @@ export function CasesManagement() {
       ) : null}
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Challan Management</h2>
+          <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Case Management</h2>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Review, filter, and inspect case records from backend.</p>
         </div>
         <div className="flex flex-col gap-3 xl:min-w-[560px]">
