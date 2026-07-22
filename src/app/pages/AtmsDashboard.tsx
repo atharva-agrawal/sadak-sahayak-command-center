@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useMsal } from "@azure/msal-react";
-import { Navigation, ShieldAlert, FileText, User, Radio, MapPin, AlertCircle, Clock, Eye, EyeOff, Phone, ArrowUpRight, Activity } from "lucide-react";
+import { Navigation, ShieldAlert, FileText, User, Radio, MapPin, AlertCircle, Clock, Eye, EyeOff, Phone, ArrowUpRight, Activity, UserCheck } from "lucide-react";
 import { mockCases } from "../mockCases";
 import { backendScopes, fetchBackendCasesOnce, type BackendCase } from "../services/backendCases";
 import { acquireBackendAccessToken } from "../services/authToken";
 import { fetchBackendLocations, type BackendLocation } from "../services/backendLocations";
 import { fetchMonitoredRoads, type MonitoredRoad } from "../services/backendRoads";
+import { fetchAssignments, createAssignment, type Assignment } from "../services/backendAssignments";
 
 // Access Google Maps from window
 const google = (window as any).google;
@@ -125,10 +126,14 @@ export function AtmsDashboard() {
   const [cases, setCases] = useState<BackendCase[]>([]);
   const [liveOfficers, setLiveOfficers] = useState<BackendLocation[]>([]);
   const [loadError, setLoadError] = useState("");
-  const [mapType, setMapType] = useState<"cases" | "location" | "dss">("location");
+  const [mapType, setMapType] = useState<"cases" | "location" | "dss" | "allocation">("location");
   const [selectedOfficerId, setSelectedOfficerId] = useState<string | null>(null);
   const [showPOIs, setShowPOIs] = useState(false);
   const isLiveData = liveOfficers.length > 0;
+
+  // Assignments State
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [selectedRoadForAssign, setSelectedRoadForAssign] = useState<MonitoredRoad | null>(null);
 
   // DSS State
   const [monitoredRoads, setMonitoredRoads] = useState<MonitoredRoad[]>([]);
@@ -153,7 +158,7 @@ export function AtmsDashboard() {
   const trafficLayerRef = useRef<any>(null);
   const activeInfoWindowRef = useRef<any>(null);
 
-  // Load cases and locations from backend or fallback
+  // Load cases, locations, and assignments from backend or fallback
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -174,6 +179,14 @@ export function AtmsDashboard() {
           setLiveOfficers(locationsData);
         } catch (err) {
           console.error("Failed to load live locations:", err);
+        }
+
+        // Fetch assignments
+        try {
+          const assignmentsData = await fetchAssignments(accessToken);
+          setAssignments(assignmentsData);
+        } catch (err) {
+          console.error("Failed to load assignments:", err);
         }
       } catch (err) {
         console.error("Auth token acquisition or fetch failed:", err);
@@ -231,7 +244,7 @@ export function AtmsDashboard() {
 
   // Trigger DSS fetch when tab is activated & set up a 30-minute auto-refresh interval
   useEffect(() => {
-    if (mapType === "dss") {
+    if (mapType === "dss" || mapType === "allocation") {
       if (dssRoadsData.length === 0 && !isDssLoading) {
         void fetchDssData();
       }
@@ -244,6 +257,56 @@ export function AtmsDashboard() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapType]);
+
+  // Dictionary keyed by officer_id for active/pending assignments
+  const assignedMap = useMemo(() => {
+    const map: Record<string, Assignment> = {};
+    assignments.forEach((a) => {
+      if (a.status === "PENDING" || a.status === "ACTIVE") {
+        map[a.officer_id] = a;
+      }
+    });
+    return map;
+  }, [assignments]);
+
+  // Instant in-memory officer assignment function
+  const handleAssignOfficer = async (road: MonitoredRoad, officer: ActiveOfficer) => {
+    const tempAssignment: Assignment = {
+      id: Date.now(),
+      road_id: road.id,
+      road_name: road.name,
+      officer_id: officer.id,
+      officer_name: officer.name,
+      assigned_by_id: "supervisor-1",
+      assigned_by_name: "Command Center Supervisor",
+      assigned_at: new Date().toISOString(),
+      responded_at: null,
+      released_at: null,
+      status: "PENDING",
+      rejection_reason: null,
+      notes: null,
+    };
+
+    // Instant UI update in React state
+    setAssignments((prev) => [tempAssignment, ...prev]);
+    setSelectedRoadForAssign(null);
+
+    // Background API call
+    try {
+      const token = await acquireBackendAccessToken(instance, accounts, backendScopes);
+      if (token) {
+        const realAss = await createAssignment(token, {
+          road_id: road.id,
+          road_name: road.name,
+          officer_id: officer.id,
+          officer_name: officer.name,
+        });
+        setAssignments((prev) => prev.map((a) => (a.id === tempAssignment.id ? realAss : a)));
+      }
+    } catch (err) {
+      console.error("Failed to persist assignment to server:", err);
+    }
+  };
 
   // Dynamically sort roads based on current/prediction sub-tab selection
   const sortedDssRoads = useMemo(() => {
@@ -370,7 +433,48 @@ export function AtmsDashboard() {
     }));
   }, [liveOfficers, mockOfficers, cases]);
 
-  // 4. Mock Officer Reports
+  // 4. Filter active officers whose last GPS ping is within 10 minutes
+  // Placed AFTER mockOfficers & activeOfficers to avoid TDZ reference errors
+  const recentActiveOfficers = useMemo(() => {
+    const tenMinAgo = Date.now() - 10 * 60 * 1000;
+    if (liveOfficers.length > 0) {
+      const nameFromCases: Record<string, string> = {};
+      for (const c of cases) {
+        if (c.user_id && c.user_name && !nameFromCases[c.user_id]) {
+          nameFromCases[c.user_id] = c.user_name;
+        }
+      }
+      return liveOfficers
+        .filter((lo) => {
+          const t = new Date(lo.recorded_at).getTime();
+          return !isNaN(t) && t >= tenMinAgo;
+        })
+        .map((lo) => ({
+          id: lo.user_id,
+          name:
+            lo.user_name && lo.user_name.trim() !== "" && lo.user_name.toLowerCase() !== "unknown officer"
+              ? lo.user_name
+              : (nameFromCases[lo.user_id] ?? `Officer ${lo.user_id.slice(0, 6)}`),
+          coords: [lo.latitude, lo.longitude] as [number, number],
+          recordedAt: lo.recorded_at,
+        }));
+    }
+    // Fall back to mock officers (all considered "recent" for demo)
+    return mockOfficers.map((mo) => ({
+      id: mo.id,
+      name: mo.name,
+      coords: mo.coords,
+      recordedAt: new Date().toISOString(),
+      badge: mo.badge,
+      status: mo.status,
+      speed: mo.speed,
+      vehicle: mo.vehicle,
+      phone: mo.phone,
+      lastReport: mo.lastReport,
+    }));
+  }, [liveOfficers, mockOfficers, cases]);
+
+  // 5. Mock Officer Reports
   const officerReports = useMemo<OfficerReport[]>(() => [
     {
       id: "rep-1",
@@ -787,6 +891,20 @@ export function AtmsDashboard() {
             <Activity className="w-3.5 h-3.5" />
             Decision Support
           </button>
+          <button
+            onClick={() => {
+              setMapType("allocation");
+              setSelectedOfficerId(null);
+            }}
+            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all ${
+              mapType === "allocation"
+                ? "bg-violet-600 text-white shadow"
+                : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+            }`}
+          >
+            <UserCheck className="w-3.5 h-3.5" />
+            Officer Allocation
+          </button>
           <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1 self-center" />
           <button
             onClick={() => setShowPOIs(!showPOIs)}
@@ -807,22 +925,24 @@ export function AtmsDashboard() {
 
       {/* Control panel & list sidebar */}
       <div className="w-96 shrink-0 flex flex-col gap-6 h-full overflow-y-auto">
-        {/* Overview Stats */}
-        <div className="bg-white/60 dark:bg-[#0A1222]/60 border border-slate-200 dark:border-indigo-500/10 rounded-2xl p-5 shadow-lg backdrop-blur-md">
-          <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">ATMS Status Overview</h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-slate-50 dark:bg-[#111C30] p-4 rounded-xl border border-slate-200 dark:border-indigo-500/5">
-              <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold uppercase block">Active Patrols</span>
-              <span className="text-2xl font-bold text-blue-600 dark:text-blue-400 mt-1 block">
-                {isLiveData ? liveOfficers.length : mockOfficers.filter(o => o.status === "Active" || o.status === "Patrol").length}
-              </span>
-            </div>
-            <div className="bg-slate-50 dark:bg-[#111C30] p-4 rounded-xl border border-slate-200 dark:border-indigo-500/5">
-              <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold uppercase block">Recent Cases</span>
-              <span className="text-2xl font-bold text-amber-500 mt-1 block">{past7DaysCases.length}</span>
+        {/* Overview Stats — hidden on Officer Allocation tab */}
+        {mapType !== "allocation" && (
+          <div className="bg-white/60 dark:bg-[#0A1222]/60 border border-slate-200 dark:border-indigo-500/10 rounded-2xl p-5 shadow-lg backdrop-blur-md">
+            <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">ATMS Status Overview</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-slate-50 dark:bg-[#111C30] p-4 rounded-xl border border-slate-200 dark:border-indigo-500/5">
+                <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold uppercase block">Active Patrols</span>
+                <span className="text-2xl font-bold text-blue-600 dark:text-blue-400 mt-1 block">
+                  {isLiveData ? liveOfficers.length : mockOfficers.filter(o => o.status === "Active" || o.status === "Patrol").length}
+                </span>
+              </div>
+              <div className="bg-slate-50 dark:bg-[#111C30] p-4 rounded-xl border border-slate-200 dark:border-indigo-500/5">
+                <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold uppercase block">Recent Cases</span>
+                <span className="text-2xl font-bold text-amber-500 mt-1 block">{past7DaysCases.length}</span>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Dynamic lists depending on map view */}
         <div className="flex-1 flex flex-col min-h-0 bg-white/60 dark:bg-[#0A1222]/60 border border-slate-200 dark:border-indigo-500/10 rounded-2xl p-5 shadow-lg backdrop-blur-md">
@@ -931,6 +1051,156 @@ export function AtmsDashboard() {
                   ))
                 )}
               </div>
+            </div>
+          ) : mapType === "allocation" ? (
+            /* ── Officer Allocation Panel ── */
+            <div className="flex flex-col h-full min-h-0">
+              <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 shrink-0">Officer Allocation</h3>
+
+              {/* Loading state if DSS not yet loaded */}
+              {isDssLoading && sortedDssRoads.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 text-slate-400">
+                  <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-violet-500" />
+                  <span className="text-xs">Loading traffic data for allocation…</span>
+                </div>
+              ) : sortedDssRoads.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-2 text-slate-400">
+                  <UserCheck className="w-8 h-8 opacity-30" />
+                  <span className="text-xs text-center">No traffic data yet.<br/>Switch to Decision Support tab to load roads.</span>
+                </div>
+              ) : (
+                <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
+
+                  {/* ── Active Officers card ── */}
+                  <div className="bg-violet-50 dark:bg-violet-500/10 border border-violet-200 dark:border-violet-500/20 rounded-xl p-3 shrink-0">
+                    <div className="flex items-center gap-2 mb-2">
+                      <UserCheck className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
+                      <span className="text-[10px] font-bold text-violet-700 dark:text-violet-300 uppercase tracking-wider">Active Officers (Last 10 min)</span>
+                      <span className="ml-auto text-[10px] font-bold bg-violet-600 text-white px-1.5 py-0.5 rounded-full">{recentActiveOfficers.length}</span>
+                    </div>
+                    {recentActiveOfficers.length === 0 ? (
+                      <p className="text-xs text-slate-400 text-center py-2">No officers with recent GPS ping.</p>
+                    ) : (
+                      <div className="space-y-1.5 max-h-36 overflow-y-auto pr-0.5">
+                        {recentActiveOfficers.map((o) => {
+                          const assigned = assignedMap[o.id];
+                          return (
+                            <div key={o.id} className="flex items-center gap-2 p-1.5 rounded-lg bg-white/70 dark:bg-[#0A1222]/70">
+                              <div className={`w-2 h-2 rounded-full shrink-0 ${assigned ? (assigned.status === "ACTIVE" ? "bg-emerald-500" : "bg-amber-400") : "bg-slate-400"}`} />
+                              <span className="text-xs font-medium text-slate-800 dark:text-slate-200 truncate flex-1">{o.name}</span>
+                              {assigned ? (
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                                  assigned.status === "ACTIVE" ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400"
+                                  : assigned.status === "PENDING" ? "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
+                                  : "bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400"
+                                }`}>
+                                  {assigned.status === "ACTIVE" ? `✓ ${assigned.road_name}` : `⏳ ${assigned.road_name}`}
+                                </span>
+                              ) : (
+                                <span className="text-[9px] text-slate-400">Available</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ── Road cards with assign action ── */}
+                  <div className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider px-1 pt-1">Roads by Priority</div>
+                  {sortedDssRoads.map((item, rank) => {
+                    const sevColor = item.curSeverity.label === "HIGH" ? "text-red-600 dark:text-red-400"
+                      : item.curSeverity.label === "MEDIUM" ? "text-amber-600 dark:text-amber-400"
+                      : "text-emerald-600 dark:text-emerald-400";
+                    const sevBadge = item.curSeverity.label === "HIGH"
+                      ? "bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/25"
+                      : item.curSeverity.label === "MEDIUM"
+                      ? "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/25"
+                      : "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/25";
+
+                    // Officers already assigned to THIS road
+                    const assignedToRoad = assignments.filter(
+                      (a) => a.road_id === item.road.id && (a.status === "PENDING" || a.status === "ACTIVE")
+                    );
+
+                    // Officers available to assign (not in assignedMap)
+                    const availableOfficers = recentActiveOfficers.filter((o) => !assignedMap[o.id]);
+
+                    const isExpanded = selectedRoadForAssign?.id === item.road.id;
+
+                    return (
+                      <div key={item.road.id} className="rounded-xl border border-slate-200 dark:border-indigo-500/10 bg-slate-50/60 dark:bg-[#111C30]/60 overflow-hidden">
+                        {/* Road header */}
+                        <div className="flex items-start gap-2 p-3">
+                          <span className="text-[11px] font-bold text-slate-400 shrink-0 mt-0.5">#{rank + 1}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">{item.road.name}</span>
+                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${sevBadge}`}>{item.curSeverity.label}</span>
+                            </div>
+                            <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-500 dark:text-slate-400">
+                              <span className={`font-semibold ${sevColor}`}>Score: {item.curPriorityScore}</span>
+                              <span>Delay: {item.cur ? (() => { const d = Math.max(0, parseInt(item.cur.duration) - parseInt(item.cur.staticDuration)); return d > 10 ? `+${Math.round(d/60)}m` : "None"; })() : "—"}</span>
+                              <span className={item.trend === "worsening" ? "text-red-500" : item.trend === "clearing" ? "text-emerald-500" : "text-amber-500"}>
+                                {item.trend === "worsening" ? "▲" : item.trend === "clearing" ? "▼" : "→"} {item.trend}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Assigned officers row */}
+                        {assignedToRoad.length > 0 && (
+                          <div className="px-3 pb-2 flex flex-wrap gap-1">
+                            {assignedToRoad.map((a) => (
+                              <span key={a.id} className={`text-[9px] font-semibold px-2 py-0.5 rounded-full ${
+                                a.status === "ACTIVE" ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400"
+                                : "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
+                              }`}>
+                                {a.status === "ACTIVE" ? "✓" : "⏳"} {a.officer_name}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Assign button / dropdown */}
+                        {availableOfficers.length > 0 && (
+                          <div className="border-t border-slate-200 dark:border-indigo-500/10">
+                            {!isExpanded ? (
+                              <button
+                                onClick={() => setSelectedRoadForAssign(item.road)}
+                                className="w-full px-3 py-2 text-[10px] font-semibold text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-500/10 transition-colors flex items-center gap-1.5 justify-center"
+                              >
+                                <UserCheck className="w-3 h-3" />
+                                Assign Officer
+                              </button>
+                            ) : (
+                              <div className="p-2 space-y-1 bg-violet-50/50 dark:bg-violet-500/5">
+                                <div className="text-[10px] font-semibold text-violet-700 dark:text-violet-300 mb-1 px-1">Select officer to assign:</div>
+                                {availableOfficers.map((o) => (
+                                  <button
+                                    key={o.id}
+                                    onClick={() => void handleAssignOfficer(item.road, o)}
+                                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-violet-100 dark:hover:bg-violet-500/15 transition-colors text-left"
+                                  >
+                                    <div className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                                    <span className="text-xs text-slate-700 dark:text-slate-200 font-medium">{o.name}</span>
+                                  </button>
+                                ))}
+                                <button
+                                  onClick={() => setSelectedRoadForAssign(null)}
+                                  className="w-full text-center text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 mt-1 py-1"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           ) : (
             /* ── DSS Priority Panel ── */
