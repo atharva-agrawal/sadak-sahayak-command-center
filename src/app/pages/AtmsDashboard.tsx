@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useMsal } from "@azure/msal-react";
-import { Navigation, ShieldAlert, FileText, User, Radio, MapPin, AlertCircle, Clock, Eye, EyeOff, Phone, ArrowUpRight, Activity, UserCheck } from "lucide-react";
+import { Navigation, ShieldAlert, FileText, User, Radio, MapPin, AlertCircle, Clock, Eye, EyeOff, Phone, ArrowUpRight, Activity, UserCheck, RefreshCw, Plus, X } from "lucide-react";
 import { mockCases } from "../mockCases";
 import { backendScopes, fetchBackendCasesOnce, type BackendCase } from "../services/backendCases";
 import { acquireBackendAccessToken } from "../services/authToken";
@@ -134,6 +134,39 @@ export function AtmsDashboard() {
   // Assignments State
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [selectedRoadForAssign, setSelectedRoadForAssign] = useState<MonitoredRoad | null>(null);
+  const [selectedOfficerForAllocate, setSelectedOfficerForAllocate] = useState<string | null>(null);
+  const [isRefreshingAssignments, setIsRefreshingAssignments] = useState(false);
+  const [dismissedRejections, setDismissedRejections] = useState<number[]>([]);
+
+  // Filter non-dismissed rejected assignments for the top alert notification box
+  const activeRejections = useMemo(() => {
+    return assignments.filter(
+      (a) => a.status === "REJECTED" && !dismissedRejections.includes(a.id)
+    );
+  }, [assignments, dismissedRejections]);
+
+  // Refresh officer status & assignments from backend
+  const handleRefreshAssignments = async () => {
+    setIsRefreshingAssignments(true);
+    try {
+      const token = await acquireBackendAccessToken(instance, accounts, backendScopes);
+      if (token) {
+        const fresh = await fetchAssignments(token);
+        setAssignments(fresh);
+        try {
+          const freshLocs = await fetchBackendLocations(token);
+          setLiveOfficers(freshLocs);
+        } catch (locErr) {
+          console.error("Failed to refresh live locations:", locErr);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to refresh assignments from server:", err);
+    } finally {
+      setIsRefreshingAssignments(false);
+    }
+  };
+
 
   // DSS State
   const [monitoredRoads, setMonitoredRoads] = useState<MonitoredRoad[]>([]);
@@ -270,7 +303,15 @@ export function AtmsDashboard() {
   }, [assignments]);
 
   // Instant in-memory officer assignment function
-  const handleAssignOfficer = async (road: MonitoredRoad, officer: ActiveOfficer) => {
+  const handleAssignOfficer = async (road: MonitoredRoad, officer: ActiveOfficer, severity: string) => {
+    console.log("👮 [handleAssignOfficer] Triggered officer assignment:", {
+      road_id: road.id,
+      road_name: road.name,
+      officer_id: officer.id,
+      officer_name: officer.name,
+      severity,
+    });
+
     const tempAssignment: Assignment = {
       id: Date.now(),
       road_id: road.id,
@@ -288,25 +329,34 @@ export function AtmsDashboard() {
     };
 
     // Instant UI update in React state
+    console.log("⏳ [handleAssignOfficer] Applying optimistic UI update with temp ID:", tempAssignment.id);
     setAssignments((prev) => [tempAssignment, ...prev]);
     setSelectedRoadForAssign(null);
 
-    // Background API call
+    // Background API call — passes severity so backend FCM notification body is accurate
     try {
+      console.log("🔑 [handleAssignOfficer] Acquiring auth token...");
       const token = await acquireBackendAccessToken(instance, accounts, backendScopes);
       if (token) {
+        console.log("🚀 [handleAssignOfficer] Calling createAssignment service...");
         const realAss = await createAssignment(token, {
           road_id: road.id,
           road_name: road.name,
           officer_id: officer.id,
           officer_name: officer.name,
+          severity,  // e.g. "HIGH" | "MEDIUM" | "LOW" from DSS curSeverity.label
         });
+        console.log("✅ [handleAssignOfficer] Server returned persistent assignment:", realAss);
         setAssignments((prev) => prev.map((a) => (a.id === tempAssignment.id ? realAss : a)));
+      } else {
+        console.warn("⚠️ [handleAssignOfficer] Could not acquire access token — assignment saved only in memory");
       }
     } catch (err) {
-      console.error("Failed to persist assignment to server:", err);
+      console.error("💥 [handleAssignOfficer] Failed to persist assignment to server:", err);
     }
   };
+
+
 
   // Dynamically sort roads based on current/prediction sub-tab selection
   const sortedDssRoads = useMemo(() => {
@@ -1055,7 +1105,37 @@ export function AtmsDashboard() {
           ) : mapType === "allocation" ? (
             /* ── Officer Allocation Panel ── */
             <div className="flex flex-col h-full min-h-0">
-              <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 shrink-0">Officer Allocation</h3>
+              <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 shrink-0">Officer Allocation</h3>
+
+              {/* ── Rejection Alerts Banner (Dismissible) ── */}
+              {activeRejections.length > 0 && (
+                <div className="space-y-2 mb-3 shrink-0">
+                  {activeRejections.map((rej) => (
+                    <div
+                      key={rej.id}
+                      className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-700 dark:text-red-300 text-xs flex items-start justify-between gap-2 shadow-sm animate-fadeIn"
+                    >
+                      <div className="flex gap-2 min-w-0">
+                        <ShieldAlert className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                        <div className="min-w-0">
+                          <div className="font-bold text-red-800 dark:text-red-200">Assignment Rejected</div>
+                          <div className="text-[11px] leading-tight text-red-600 dark:text-red-300 mt-0.5">
+                            Officer <strong>{rej.officer_name}</strong> rejected <strong>{rej.road_name}</strong>.
+                            {rej.rejection_reason && <div className="italic mt-0.5">"{rej.rejection_reason}"</div>}
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setDismissedRejections((prev) => [...prev, rej.id])}
+                        className="text-red-400 hover:text-red-600 dark:hover:text-red-200 p-1 rounded-lg hover:bg-red-500/10 shrink-0 transition-colors"
+                        title="Dismiss alert"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* Loading state if DSS not yet loaded */}
               {isDssLoading && sortedDssRoads.length === 0 ? (
@@ -1073,31 +1153,97 @@ export function AtmsDashboard() {
 
                   {/* ── Active Officers card ── */}
                   <div className="bg-violet-50 dark:bg-violet-500/10 border border-violet-200 dark:border-violet-500/20 rounded-xl p-3 shrink-0">
-                    <div className="flex items-center gap-2 mb-2">
-                      <UserCheck className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
-                      <span className="text-[10px] font-bold text-violet-700 dark:text-violet-300 uppercase tracking-wider">Active Officers (Last 10 min)</span>
-                      <span className="ml-auto text-[10px] font-bold bg-violet-600 text-white px-1.5 py-0.5 rounded-full">{recentActiveOfficers.length}</span>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <UserCheck className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
+                        <span className="text-[10px] font-bold text-violet-700 dark:text-violet-300 uppercase tracking-wider">Active Officers (Last 10 min)</span>
+                        <span className="text-[10px] font-bold bg-violet-600 text-white px-1.5 py-0.5 rounded-full">{recentActiveOfficers.length}</span>
+                      </div>
+                      <button
+                        onClick={() => void handleRefreshAssignments()}
+                        disabled={isRefreshingAssignments}
+                        className="flex items-center gap-1 text-[10px] font-semibold text-violet-700 dark:text-violet-300 hover:bg-violet-200/60 dark:hover:bg-violet-500/20 px-2 py-0.5 rounded-lg transition-colors disabled:opacity-50"
+                        title="Refresh assignment statuses from backend"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isRefreshingAssignments ? "animate-spin" : ""}`} />
+                        Refresh
+                      </button>
                     </div>
+
                     {recentActiveOfficers.length === 0 ? (
                       <p className="text-xs text-slate-400 text-center py-2">No officers with recent GPS ping.</p>
                     ) : (
-                      <div className="space-y-1.5 max-h-36 overflow-y-auto pr-0.5">
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
                         {recentActiveOfficers.map((o) => {
                           const assigned = assignedMap[o.id];
+                          const isAllocatingThisOfficer = selectedOfficerForAllocate === o.id;
+
                           return (
-                            <div key={o.id} className="flex items-center gap-2 p-1.5 rounded-lg bg-white/70 dark:bg-[#0A1222]/70">
-                              <div className={`w-2 h-2 rounded-full shrink-0 ${assigned ? (assigned.status === "ACTIVE" ? "bg-emerald-500" : "bg-amber-400") : "bg-slate-400"}`} />
-                              <span className="text-xs font-medium text-slate-800 dark:text-slate-200 truncate flex-1">{o.name}</span>
-                              {assigned ? (
-                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                                  assigned.status === "ACTIVE" ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400"
-                                  : assigned.status === "PENDING" ? "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
-                                  : "bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400"
-                                }`}>
-                                  {assigned.status === "ACTIVE" ? `✓ ${assigned.road_name}` : `⏳ ${assigned.road_name}`}
-                                </span>
-                              ) : (
-                                <span className="text-[9px] text-slate-400">Available</span>
+                            <div key={o.id} className="p-2 rounded-lg bg-white/80 dark:bg-[#0A1222]/80 border border-violet-100 dark:border-violet-900/30 flex flex-col gap-1.5 transition-all">
+                              <div className="flex items-center gap-2">
+                                {/* Dot is GREEN when officer is available or active */}
+                                <div className={`w-2 h-2 rounded-full shrink-0 ${
+                                  assigned
+                                    ? (assigned.status === "ACTIVE" ? "bg-emerald-500" : assigned.status === "REJECTED" ? "bg-red-500" : "bg-amber-400")
+                                    : "bg-emerald-500"
+                                }`} />
+                                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate flex-1">{o.name}</span>
+
+                                {assigned ? (
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                                    assigned.status === "ACTIVE" ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400"
+                                    : assigned.status === "PENDING" ? "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
+                                    : "bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400"
+                                  }`}>
+                                    {assigned.status === "ACTIVE" ? `✓ ${assigned.road_name}` : assigned.status === "PENDING" ? `⏳ ${assigned.road_name}` : `❌ Rejected`}
+                                  </span>
+                                ) : (
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-[9px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-1.5 py-0.5 rounded-full">
+                                      Available
+                                    </span>
+                                    <button
+                                      onClick={() => setSelectedOfficerForAllocate(isAllocatingThisOfficer ? null : o.id)}
+                                      className={`text-[9px] font-bold px-2 py-0.5 rounded-full transition-all flex items-center gap-1 shrink-0 ${
+                                        isAllocatingThisOfficer
+                                          ? "bg-violet-600 text-white"
+                                          : "bg-violet-100 hover:bg-violet-200 dark:bg-violet-500/20 text-violet-700 dark:text-violet-300"
+                                      }`}
+                                    >
+                                      <Plus className="w-2.5 h-2.5" />
+                                      {isAllocatingThisOfficer ? "Close" : "Allocate"}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Compact Filter-like UI for Road Selection (No heavy dropdown) */}
+                              {isAllocatingThisOfficer && !assigned && (
+                                <div className="mt-1 p-2 rounded-lg bg-violet-100/60 dark:bg-violet-950/50 border border-violet-200 dark:border-violet-800/40 space-y-1.5 animate-fadeIn">
+                                  <div className="text-[9px] font-bold text-violet-800 dark:text-violet-300 uppercase tracking-wider">Select priority road:</div>
+                                  <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto pr-0.5">
+                                    {sortedDssRoads.map((item, idx) => {
+                                      const sevBadge = item.curSeverity.label === "HIGH"
+                                        ? "bg-red-500 text-white"
+                                        : item.curSeverity.label === "MEDIUM"
+                                        ? "bg-amber-500 text-white"
+                                        : "bg-emerald-500 text-white";
+                                      return (
+                                        <button
+                                          key={item.road.id}
+                                          onClick={() => {
+                                            void handleAssignOfficer(item.road, o, item.curSeverity.label);
+                                            setSelectedOfficerForAllocate(null);
+                                          }}
+                                          className="text-[9px] font-medium px-2 py-1 rounded-lg bg-white dark:bg-[#111C30] hover:bg-violet-100 dark:hover:bg-violet-900/40 border border-violet-200 dark:border-violet-700/50 text-slate-800 dark:text-slate-200 flex items-center gap-1 shadow-sm transition-all text-left"
+                                        >
+                                          <span className={`text-[8px] font-bold px-1 rounded ${sevBadge}`}>#{idx + 1}</span>
+                                          <span className="truncate max-w-[120px] font-semibold">{item.road.name}</span>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
                               )}
                             </div>
                           );
@@ -1179,7 +1325,7 @@ export function AtmsDashboard() {
                                 {availableOfficers.map((o) => (
                                   <button
                                     key={o.id}
-                                    onClick={() => void handleAssignOfficer(item.road, o)}
+                                    onClick={() => void handleAssignOfficer(item.road, o, item.curSeverity.label)}
                                     className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-violet-100 dark:hover:bg-violet-500/15 transition-colors text-left"
                                   >
                                     <div className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
