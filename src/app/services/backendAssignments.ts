@@ -27,6 +27,8 @@ export type AssignmentCreatePayload = {
   officer_name: string;
   assigned_by_id?: string;
   assigned_by_name?: string;
+  /** DSS-computed severity (HIGH / MEDIUM / LOW) — sent in FCM notification body */
+  severity?: string;
   notes?: string;
 };
 
@@ -51,24 +53,34 @@ export async function fetchAssignments(token: string, status?: string): Promise<
 
 export async function createAssignment(token: string, payload: AssignmentCreatePayload): Promise<Assignment> {
   const url = `${backendBaseUrl}/assignments`;
-  console.log("🌐 [createAssignment] Creating:", url, payload);
+  console.log("🌐 [createAssignment] POSTing to:", url);
+  console.log("📦 [createAssignment] Payload:", JSON.stringify(payload, null, 2));
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(payload),
-  });
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
 
-  if (!response.ok) {
-    const text = await response.text();
-    console.error("🚨 [createAssignment] Response not OK:", response.status, text);
-    throw new Error(`Failed to create assignment (${response.status}): ${text}`);
+    console.log("📡 [createAssignment] Response Status:", response.status, response.statusText);
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error("🚨 [createAssignment] Server error response:", response.status, text);
+      throw new Error(`Failed to create assignment (${response.status}): ${text}`);
+    }
+
+    const createdAssignment = (await response.json()) as Assignment;
+    console.log("🎉 [createAssignment] Assignment successfully created on server:", createdAssignment);
+    return createdAssignment;
+  } catch (err) {
+    console.error("💥 [createAssignment] Fetch error:", err);
+    throw err;
   }
-
-  return (await response.json()) as Assignment;
 }
 
 export { backendScopes };
