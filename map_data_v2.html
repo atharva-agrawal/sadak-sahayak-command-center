@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Durg-Bhilai Traffic Decision Support</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f0f2f5; overflow: hidden; }
+
+    #topbar {
+      height: 46px; background: #1a1a2e; color: white;
+      display: flex; align-items: center; padding: 0 16px; gap: 12px;
+    }
+    #topbar h1 { font-size: 14px; font-weight: 600; flex: 1; }
+    #topbar span { font-size: 11px; color: #aaa; }
+    #refresh-btn {
+      padding: 5px 12px; background: #e94560; color: white;
+      border: none; border-radius: 6px; font-size: 12px; cursor: pointer;
+    }
+    #refresh-btn:disabled { background: #555; cursor: default; }
+    #countdown { font-size: 11px; color: #7ec8e3; min-width: 80px; text-align: right; }
+
+    #layout { display: grid; grid-template-columns: 1fr 380px; height: calc(100vh - 46px); }
+
+    #map { width: 100%; height: 100%; }
+
+    /* ── Sidebar ── */
+    #sidebar { background: white; border-left: 1px solid #e0e0e0; display: flex; flex-direction: column; overflow: hidden; }
+    #sidebar-head { padding: 10px 14px; background: #f8f8f8; border-bottom: 1px solid #eee; flex-shrink: 0; }
+    #sidebar-head h2 { font-size: 13px; font-weight: 600; }
+    #sidebar-head p  { font-size: 10px; color: #888; margin-top: 2px; }
+
+    /* summary stats */
+    #summary { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1px; background: #eee; flex-shrink: 0; }
+    .sum-cell { background: white; padding: 8px 0; text-align: center; }
+    .sum-val { font-size: 20px; font-weight: 700; }
+    .sum-lbl { font-size: 9px; color: #888; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 1px; }
+    .col-red    { color: #e53935; }
+    .col-orange { color: #fb8c00; }
+    .col-green  { color: #43a047; }
+
+    #cards { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+
+    /* ── Cards ── */
+    .card { border: 1px solid #e8e8e8; border-radius: 10px; padding: 11px 13px; background: white; cursor: pointer; transition: box-shadow 0.15s, border-color 0.15s; }
+    .card:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.09); }
+    .card.active { border-color: #1a1a2e; box-shadow: 0 0 0 2px rgba(26,26,46,0.15); }
+
+    .card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+    .card-name { font-size: 12px; font-weight: 600; color: #111; line-height: 1.3; flex: 1; margin-right: 8px; }
+    .badge { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 20px; white-space: nowrap; }
+    .badge-HIGH   { background: #fce4ec; color: #c62828; }
+    .badge-MEDIUM { background: #fff8e1; color: #e65100; }
+    .badge-LOW    { background: #e8f5e9; color: #2e7d32; }
+    .badge-NA     { background: #f5f5f5; color: #999; }
+
+    .metrics { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; }
+    .metric { background: #f9f9f9; border-radius: 6px; padding: 5px 6px; text-align: center; }
+    .metric-val { font-size: 14px; font-weight: 600; color: #111; }
+    .metric-lbl { font-size: 9px; color: #999; margin-top: 1px; text-transform: uppercase; }
+    .delay-positive { color: #e53935; }
+    .delay-none     { color: #43a047; }
+
+    /* speed bar */
+    .speed-bar { display: flex; gap: 2px; margin-top: 7px; height: 5px; border-radius: 3px; overflow: hidden; }
+    .seg { flex: 1; }
+    .seg-NORMAL      { background: #43a047; }
+    .seg-SLOW        { background: #fb8c00; }
+    .seg-TRAFFIC_JAM { background: #e53935; }
+    .seg-UNKNOWN     { background: #e0e0e0; }
+
+    /* prediction row */
+    .pred-row {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 7px; padding: 5px 9px; border-radius: 6px; background: #f5f0ff;
+    }
+    .pred-left { font-size: 10px; }
+    .pred-label { color: #7c4dff; font-weight: 600; font-size: 9px; text-transform: uppercase; letter-spacing: 0.3px; }
+    .pred-val   { color: #333; margin-top: 1px; }
+    .trend { font-size: 12px; font-weight: 700; }
+    .trend-worse  { color: #e53935; }
+    .trend-same   { color: #fb8c00; }
+    .trend-better { color: #43a047; }
+
+    /* decision banner */
+    .decision { margin-top: 7px; padding: 6px 9px; border-radius: 6px; font-size: 11px; font-weight: 500; }
+    .decision-deploy  { background: #fce4ec; color: #b71c1c; }
+    .decision-monitor { background: #fff8e1; color: #e65100; }
+    .decision-clear   { background: #e8f5e9; color: #1b5e20; }
+
+    .loading-card { text-align: center; padding: 30px 14px; font-size: 12px; color: #aaa; }
+    .error-card   { background: #fff5f5; border: 1px solid #ffcdd2; border-radius: 10px; padding: 10px 13px; font-size: 11px; color: #c62828; }
+  </style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>🚦 Durg-Bhilai Traffic Decision Support System</h1>
+  <span id="last-time">Not fetched yet</span>
+  <span id="countdown"></span>
+  <button id="refresh-btn" onclick="fetchAll()">🔄 Refresh</button>
+</div>
+
+<div id="layout">
+  <div id="map"></div>
+  <div id="sidebar">
+    <div id="sidebar-head">
+      <h2>Junction severity dashboard</h2>
+      <p>Live + 30-min predicted · Google Routes API</p>
+    </div>
+    <div id="summary">
+      <div class="sum-cell"><div class="sum-val col-red"    id="s-high">—</div><div class="sum-lbl">High</div></div>
+      <div class="sum-cell"><div class="sum-val col-orange" id="s-med">—</div><div class="sum-lbl">Medium</div></div>
+      <div class="sum-cell"><div class="sum-val col-green"  id="s-low">—</div><div class="sum-lbl">Low / Clear</div></div>
+    </div>
+    <div id="cards"><div class="loading-card">Press Refresh to load live traffic data</div></div>
+  </div>
+</div>
+
+<script>
+// ─── Config ──────────────────────────────────────────────────────────────────
+const API_KEY       = "AIzaSyDmRsuOtPac3kr9Cn_bFNz7k9t2uA16SMQ";
+const REFRESH_SECS  = 300; // auto-refresh every 5 minutes
+const FUTURE_OFFSET = 2 * 60 * 1000;   // +2 min for current (API requires future ts)
+const PRED_OFFSET   = 32 * 60 * 1000;  // +32 min for prediction
+
+const ROADS = [
+  { name:"Supela Chowk → Civic Centre",          origin:{lat:21.2134,lng:81.3234}, dest:{lat:21.2089,lng:81.3123} },
+  { name:"GE Road — Durg Station → Nehru Nagar", origin:{lat:21.1867,lng:81.2812}, dest:{lat:21.2012,lng:81.2956} },
+  { name:"Kohka Chowk → Bhilai Nagar",           origin:{lat:21.2201,lng:81.3345}, dest:{lat:21.2156,lng:81.3456} },
+  { name:"Power House → Padmanabhapur",           origin:{lat:21.1978,lng:81.2901}, dest:{lat:21.1789,lng:81.3012} },
+  { name:"Sector 6 → Maroda Crossing",            origin:{lat:21.2234,lng:81.3567}, dest:{lat:21.2312,lng:81.3089} },
+  { name:"Smriti Nagar → Risali Sector",          origin:{lat:21.2045,lng:81.2789}, dest:{lat:21.2189,lng:81.2567} },
+];
+
+// ─── Severity ────────────────────────────────────────────────────────────────
+function severity(durS, statS, intervals) {
+  if (!durS || !statS) return { score:0, label:"NA" };
+  const ratio = parseInt(durS) / parseInt(statS);
+  const segs  = intervals || [];
+  const total = segs.length || 1;
+  const jams  = segs.filter(s => s.speed === "TRAFFIC_JAM").length / total;
+  const slow  = segs.filter(s => s.speed === "SLOW").length / total;
+  const score = Math.min(100, Math.round((ratio - 1) * 80 + jams * 25 + slow * 10));
+  const label = score >= 40 ? "HIGH" : score >= 12 ? "MEDIUM" : "LOW";
+  return { score, label };
+}
+
+function fmtMin(s)  { return s ? Math.round(parseInt(s)/60) + " min" : "—"; }
+function fmtDelay(d, st) {
+  if (!d || !st) return "—";
+  const sec = parseInt(d) - parseInt(st);
+  return sec <= 10 ? "None" : `+${Math.round(sec/60)} min`;
+}
+function delayClass(d, st) {
+  if (!d || !st) return "";
+  return (parseInt(d) - parseInt(st)) > 10 ? "delay-positive" : "delay-none";
+}
+
+function trendHTML(cur, pred) {
+  const diff = pred.score - cur.score;
+  if (diff >=  10) return `<span class="trend trend-worse">▲ Worsening</span>`;
+  if (diff <= -10) return `<span class="trend trend-better">▼ Clearing</span>`;
+  return                  `<span class="trend trend-same">→ Stable</span>`;
+}
+
+function decisionBanner(cur, pred) {
+  if (cur.label === "HIGH" || (cur.label === "MEDIUM" && pred.score - cur.score >= 10)) {
+    return `<div class="decision decision-deploy">🚨 Deploy officer — high congestion${pred.score > cur.score ? ", worsening" : ""}</div>`;
+  }
+  if (cur.label === "MEDIUM") {
+    return `<div class="decision decision-monitor">👁 Monitor — moderate traffic, may worsen</div>`;
+  }
+  return `<div class="decision decision-clear">✅ Clear — no action needed</div>`;
+}
+
+// ─── API call ─────────────────────────────────────────────────────────────────
+async function fetchRoute(road, offsetMs) {
+  const depTime = new Date(Date.now() + offsetMs).toISOString();
+  const body = {
+    origin:      { location: { latLng: { latitude: road.origin.lat, longitude: road.origin.lng } } },
+    destination: { location: { latLng: { latitude: road.dest.lat,   longitude: road.dest.lng   } } },
+    travelMode: "DRIVE",
+    routingPreference: "TRAFFIC_AWARE_OPTIMAL",
+    departureTime: depTime,
+    extraComputations: ["TRAFFIC_ON_POLYLINE"],
+    polylineQuality: "HIGH_QUALITY",
+  };
+  const res = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": API_KEY,
+      "X-Goog-FieldMask": [
+        "routes.duration",
+        "routes.staticDuration",
+        "routes.distanceMeters",
+        "routes.travelAdvisory.speedReadingIntervals",
+        "routes.polyline.encodedPolyline",
+      ].join(","),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(()=>({}));
+    throw new Error(e?.error?.message || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ─── Map ──────────────────────────────────────────────────────────────────────
+let map, polylines = [], infoWindow;
+
+function initMap() {
+  map = new google.maps.Map(document.getElementById("map"), {
+    center: { lat: 21.2050, lng: 81.3100 },
+    zoom: 13,
+    mapTypeControl: false,
+    streetViewControl: false,
+    fullscreenControl: false,
+    styles: [{ featureType:"poi", stylers:[{visibility:"off"}] }],
+  });
+  new google.maps.TrafficLayer().setMap(map);
+  infoWindow = new google.maps.InfoWindow();
+}
+
+const SEV_COLOR = { HIGH:"#e53935", MEDIUM:"#fb8c00", LOW:"#43a047", NA:"#9e9e9e" };
+
+function clearPolylines() { polylines.forEach(p => p.setMap(null)); polylines = []; }
+
+function decodePolyline(encoded) {
+  // Google's encoded polyline decoder
+  const pts = []; let idx=0, lat=0, lng=0;
+  while (idx < encoded.length) {
+    let b, shift=0, result=0;
+    do { b=encoded.charCodeAt(idx++)-63; result|=(b&0x1f)<<shift; shift+=5; } while(b>=0x20);
+    lat += (result&1) ? ~(result>>1) : result>>1;
+    shift=0; result=0;
+    do { b=encoded.charCodeAt(idx++)-63; result|=(b&0x1f)<<shift; shift+=5; } while(b>=0x20);
+    lng += (result&1) ? ~(result>>1) : result>>1;
+    pts.push({ lat: lat/1e5, lng: lng/1e5 });
+  }
+  return pts;
+}
+
+function drawPolyline(road, route, sevLabel, index) {
+  const encoded = route?.polyline?.encodedPolyline;
+  const path    = encoded ? decodePolyline(encoded) : [road.origin, road.dest];
+  const segs    = route?.travelAdvisory?.speedReadingIntervals || [];
+
+  // If we have speed intervals, draw each segment with its own color
+  if (encoded && segs.length > 1) {
+    const pts = path;
+    segs.forEach(seg => {
+      const segPath = pts.slice(
+        seg.startPolylinePointIndex || 0,
+        (seg.endPolylinePointIndex || pts.length - 1) + 1
+      );
+      const color = seg.speed === "TRAFFIC_JAM" ? "#e53935"
+                  : seg.speed === "SLOW"         ? "#fb8c00"
+                  :                                "#43a047";
+      const p = new google.maps.Polyline({
+        path: segPath, map, geodesic: true,
+        strokeColor: color, strokeOpacity: 0.9, strokeWeight: 6,
+      });
+      polylines.push(p);
+    });
+  } else {
+    // Single color for whole route
+    const p = new google.maps.Polyline({
+      path, map, geodesic: true,
+      strokeColor: SEV_COLOR[sevLabel],
+      strokeOpacity: 0.85, strokeWeight: 6,
+    });
+    p.addListener("click", e => {
+      infoWindow.setContent(`<b style="font-size:13px">${road.name}</b><br>Severity: <b>${sevLabel}</b>`);
+      infoWindow.setPosition(e.latLng);
+      infoWindow.open(map);
+    });
+    polylines.push(p);
+  }
+
+  // Origin marker
+  const marker = new google.maps.Marker({
+    position: road.origin, map,
+    label: { text: String(index + 1), color: "white", fontSize: "11px", fontWeight: "bold" },
+    icon: {
+      path: google.maps.SymbolPath.CIRCLE,
+      scale: 11,
+      fillColor: SEV_COLOR[sevLabel], fillOpacity: 1,
+      strokeColor: "white", strokeWeight: 2,
+    },
+  });
+  marker.addListener("click", () => {
+    document.querySelectorAll(".card")[index]?.scrollIntoView({ behavior:"smooth", block:"nearest" });
+    highlightCard(index);
+  });
+  polylines.push(marker);
+}
+
+function highlightCard(index) {
+  document.querySelectorAll(".card").forEach((c,i) => c.classList.toggle("active", i===index));
+}
+
+// ─── Render cards ─────────────────────────────────────────────────────────────
+function buildCard(road, curRoute, predRoute, index) {
+  const dur    = curRoute?.duration;
+  const stat   = curRoute?.staticDuration;
+  const dist   = curRoute?.distanceMeters;
+  const segs   = curRoute?.travelAdvisory?.speedReadingIntervals || [];
+  const pdur   = predRoute?.duration;
+  const pstat  = predRoute?.staticDuration;
+  const psegs  = predRoute?.travelAdvisory?.speedReadingIntervals || [];
+
+  const cur  = severity(dur, stat, segs);
+  const pred = severity(pdur, pstat, psegs);
+
+  drawPolyline(road, curRoute, cur.label, index);
+
+  const segBar = segs.length
+    ? segs.map(s=>`<div class="seg seg-${s.speed||'UNKNOWN'}" title="${s.speed}"></div>`).join("")
+    : `<div class="seg seg-UNKNOWN"></div>`;
+
+  return `
+    <div class="card" onclick="highlightCard(${index}); if(window.map) window.map.panTo({lat:${road.origin.lat},lng:${road.origin.lng}})">
+      <div class="card-top">
+        <div class="card-name">${index+1}. ${road.name}</div>
+        <span class="badge badge-${cur.label}">${cur.label} · ${cur.score}</span>
+      </div>
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-val">${fmtMin(dur)}</div>
+          <div class="metric-lbl">Live</div>
+        </div>
+        <div class="metric">
+          <div class="metric-val">${fmtMin(stat)}</div>
+          <div class="metric-lbl">Free flow</div>
+        </div>
+        <div class="metric">
+          <div class="metric-val ${delayClass(dur,stat)}">${fmtDelay(dur,stat)}</div>
+          <div class="metric-lbl">Delay</div>
+        </div>
+      </div>
+      <div style="margin-top:5px;font-size:9px;color:#bbb">${dist?(dist/1000).toFixed(1)+"km":""} · ${segs.length} speed interval${segs.length!==1?"s":""} from API</div>
+      <div class="speed-bar">${segBar}</div>
+      <div class="pred-row">
+        <div class="pred-left">
+          <div class="pred-label">30-min prediction</div>
+          <div class="pred-val">Score: <b>${pred.score}</b> · ${fmtDelay(pdur,pstat)} delay</div>
+        </div>
+        ${trendHTML(cur, pred)}
+      </div>
+      ${decisionBanner(cur, pred)}
+    </div>
+  `;
+}
+
+// ─── Main fetch ───────────────────────────────────────────────────────────────
+let autoTimer, countdownTimer, secsLeft = REFRESH_SECS;
+
+async function fetchAll() {
+  const btn = document.getElementById("refresh-btn");
+  btn.disabled = true; btn.textContent = "⏳ Fetching…";
+  document.getElementById("cards").innerHTML = '<div class="loading-card">Calling Google Routes API for all junctions…<br><span style="font-size:10px;color:#bbb">2 calls per junction (live + prediction)</span></div>';
+  clearPolylines();
+
+  const results = await Promise.all(ROADS.map(async (road, i) => {
+    try {
+      const [cur, pred] = await Promise.all([
+        fetchRoute(road, FUTURE_OFFSET),
+        fetchRoute(road, PRED_OFFSET),
+      ]);
+      return { road, cur: cur.routes?.[0], pred: pred.routes?.[0], error: null };
+    } catch(e) {
+      return { road, cur: null, pred: null, error: e.message };
+    }
+  }));
+
+  // Summary counts
+  const counts = { HIGH:0, MEDIUM:0, LOW:0, NA:0 };
+  results.forEach(r => {
+    if (r.error) { counts.NA++; return; }
+    const s = severity(r.cur?.duration, r.cur?.staticDuration, r.cur?.travelAdvisory?.speedReadingIntervals);
+    counts[s.label]++;
+  });
+  document.getElementById("s-high").textContent = counts.HIGH;
+  document.getElementById("s-med").textContent  = counts.MEDIUM;
+  document.getElementById("s-low").textContent  = counts.LOW + counts.NA;
+
+  // Cards
+  document.getElementById("cards").innerHTML = results.map((r, i) => {
+    if (r.error) return `<div class="error-card">⚠ <b>${r.road.name}</b><br>${r.error}</div>`;
+    return buildCard(r.road, r.cur, r.pred, i);
+  }).join("");
+
+  document.getElementById("last-time").textContent = "Updated " + new Date().toLocaleTimeString();
+  btn.disabled = false; btn.textContent = "🔄 Refresh";
+
+  // Auto-refresh countdown
+  clearInterval(autoTimer); clearInterval(countdownTimer);
+  secsLeft = REFRESH_SECS;
+  countdownTimer = setInterval(() => {
+    secsLeft--;
+    const m = Math.floor(secsLeft/60), s = secsLeft%60;
+    document.getElementById("countdown").textContent = `Auto-refresh in ${m}:${String(s).padStart(2,"0")}`;
+    if (secsLeft <= 0) { clearInterval(countdownTimer); fetchAll(); }
+  }, 1000);
+}
+
+// expose map for card clicks
+window.map = null;
+const _initMap = initMap;
+window.initMap = function(){ _initMap(); window.map = map; };
+</script>
+
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDmRsuOtPac3kr9Cn_bFNz7k9t2uA16SMQ&callback=initMap" async defer></script>
+</body>
+</html>

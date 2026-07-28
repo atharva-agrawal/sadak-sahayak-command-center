@@ -11,34 +11,56 @@ import {
   Cell,
 } from "recharts";
 import { motion } from "motion/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { mockCases } from "../mockCases";
+import { useMsal } from "@azure/msal-react";
 import { MapWidget } from "../components/MapWidget";
 import { LiveFeed } from "../components/LiveFeed";
 import { AiInsights } from "../components/AiInsights";
+import { OfficerQueries } from "../components/OfficerQueries";
 import { Shield, Users, Activity } from "lucide-react";
+import { backendScopes, fetchBackendCasesOnce, type BackendCase } from "../services/backendCases";
+import { acquireBackendAccessToken } from "../services/authToken";
 
 export function Dashboard() {
+  const { instance, accounts } = useMsal();
   const navigate = useNavigate();
+  const [cases, setCases] = useState<BackendCase[]>([]);
+  const [loadError, setLoadError] = useState("");
   const [trendViolation, setTrendViolation] = useState("All violations");
   const [trendOfficer, setTrendOfficer] = useState("All officers");
   const [pieOfficer, setPieOfficer] = useState("All officers");
   const [pieWindow, setPieWindow] = useState("Last 30 days");
 
+  useEffect(() => {
+    const loadCases = async () => {
+      try {
+        const accessToken = await acquireBackendAccessToken(instance, accounts, backendScopes);
+        if (!accessToken) return;
+        const data = await fetchBackendCasesOnce(accessToken);
+        setCases(data);
+        setLoadError("");
+      } catch {
+        setCases([]);
+        setLoadError("Unable to load dashboard data. Please sign in again.");
+      }
+    };
+    void loadCases();
+  }, [accounts, instance]);
+
   const violationOptions = useMemo(
-    () => ["All violations", ...Array.from(new Set(mockCases.map((item) => item.reason))).sort()],
-    [],
+    () => ["All violations", ...Array.from(new Set(cases.map((item) => item.reason))).sort()],
+    [cases],
   );
   const officerOptions = useMemo(
-    () => ["All officers", ...Array.from(new Set(mockCases.map((item) => item.user_name))).sort()],
-    [],
+    () => ["All officers", ...Array.from(new Set(cases.map((item) => item.user_name))).sort()],
+    [cases],
   );
   const pieWindowOptions = ["Last 7 days", "Last 30 days", "All time"];
   const piePalette = ["#3b82f6", "#10b981", "#f59e0b", "#ec4899", "#8b5cf6", "#06b6d4", "#ef4444"];
 
   const weeklyTrendData = useMemo(() => {
-    const latestCaseDate = [...mockCases]
+    const latestCaseDate = [...cases]
       .sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime())
       .at(-1)?.created_at;
 
@@ -50,7 +72,7 @@ export function Dashboard() {
       current.setDate(endDate.getDate() - (6 - index));
       const isoDate = current.toISOString().slice(0, 10);
 
-      const cases = mockCases.filter((item) => {
+      const dayCases = cases.filter((item) => {
         const itemDate = new Date(item.created_at).toISOString().slice(0, 10);
         const matchesDate = itemDate === isoDate;
         const matchesViolation =
@@ -64,13 +86,13 @@ export function Dashboard() {
       return {
         day: current.toLocaleDateString("en-IN", { weekday: "short" }),
         date: isoDate,
-        cases: cases.length,
+        cases: dayCases.length,
       };
     });
-  }, [trendOfficer, trendViolation]);
+  }, [cases, trendOfficer, trendViolation]);
 
   const pieData = useMemo(() => {
-    const latestDate = [...mockCases]
+    const latestDate = [...cases]
       .sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime())
       .at(-1)?.created_at;
 
@@ -85,7 +107,7 @@ export function Dashboard() {
       start.setHours(0, 0, 0, 0);
     }
 
-    const filtered = mockCases.filter((item) => {
+    const filtered = cases.filter((item) => {
       const itemDate = new Date(item.created_at);
       const matchesOfficer = pieOfficer === "All officers" || item.user_name === pieOfficer;
       const matchesWindow = !Number.isFinite(windowDays) || itemDate >= start;
@@ -104,7 +126,7 @@ export function Dashboard() {
         color: piePalette[index % piePalette.length],
       }))
       .sort((left, right) => right.value - left.value);
-  }, [pieOfficer, pieWindow]);
+  }, [cases, pieOfficer, pieWindow]);
 
   const totalPieCases = useMemo(
     () => pieData.reduce((sum, item) => sum + item.value, 0),
@@ -137,13 +159,28 @@ export function Dashboard() {
     navigate(`/cases?${params.toString()}`);
   };
 
+  const todaysCases = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return cases.filter((item) => new Date(item.created_at).toISOString().slice(0, 10) === today).length;
+  }, [cases]);
+
+  const activeOfficers = useMemo(
+    () => new Set(cases.map((item) => item.user_name)).size,
+    [cases],
+  );
+
   return (
     <div className="space-y-6 pb-10">
+      {loadError ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+          {loadError}
+        </div>
+      ) : null}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         <KpiCard
           title="Today's Cases"
-          value="1,245"
-          trend="+12%"
+          value={String(todaysCases)}
+          trend="Live"
           trendUp={true}
           icon={<Shield className="w-5 h-5 text-blue-400" />}
           color="from-blue-600/20 to-indigo-600/5"
@@ -151,10 +188,10 @@ export function Dashboard() {
           onClick={() => navigate("/cases")}
         />
         <KpiCard
-          title="Pending Actions"
-          value="342"
-          trend="-5%"
-          trendUp={false}
+          title="Total Cases"
+          value={String(cases.length)}
+          trend="Live"
+          trendUp={true}
           icon={<Activity className="w-5 h-5 text-amber-400" />}
           color="from-amber-600/20 to-orange-600/5"
           borderColor="border-amber-500/20"
@@ -162,8 +199,8 @@ export function Dashboard() {
         />
         <KpiCard
           title="Active Officers"
-          value="89"
-          trend="Stable"
+          value={String(activeOfficers)}
+          trend="Live"
           trendUp={true}
           icon={<Users className="w-5 h-5 text-purple-400" />}
           color="from-purple-600/20 to-pink-600/5"
@@ -172,8 +209,8 @@ export function Dashboard() {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 h-[450px] lg:grid-cols-3">
-        <div className="lg:col-span-2 bg-white/60 dark:bg-[#0A1222]/60 backdrop-blur-md rounded-2xl border border-slate-200 dark:border-indigo-500/10 shadow-lg flex flex-col overflow-hidden">
+      <div className="grid grid-cols-1 gap-6 lg:h-[450px] lg:grid-cols-3">
+        <div className="lg:col-span-2 h-[350px] lg:h-full bg-white/60 dark:bg-[#0A1222]/60 backdrop-blur-md rounded-2xl border border-slate-200 dark:border-indigo-500/10 shadow-lg flex flex-col overflow-hidden">
           <div className="p-5 border-b border-slate-200 dark:border-indigo-500/10 flex justify-between items-center bg-slate-50/40 dark:bg-[#050B14]/40">
             <div>
               <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100 uppercase tracking-wider">Geographic Hotspots</h3>
@@ -185,12 +222,17 @@ export function Dashboard() {
             </div>
           </div>
           <div className="flex-1 p-4">
-            <MapWidget />
+            <MapWidget cases={cases} />
           </div>
         </div>
 
-        <div className="lg:col-span-1">
-          <LiveFeed />
+        <div className="lg:col-span-1 flex flex-col gap-6 h-auto lg:h-[450px] overflow-hidden">
+          <div className="h-[220px] lg:h-[213px] overflow-hidden shrink-0">
+            <LiveFeed cases={cases} />
+          </div>
+          <div className="h-[220px] lg:h-[213px] overflow-hidden shrink-0">
+            <OfficerQueries />
+          </div>
         </div>
       </div>
 
