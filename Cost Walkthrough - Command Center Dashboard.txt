@@ -1,0 +1,162 @@
+Cost Walkthrough: A Day in the Life of the Sadak Sahayak Command Center Dashboard
+
+This document walks through every external service call and compute event that occurs during
+a typical supervisor session on the Sadak Sahayak Command Center web dashboard, including
+Google Maps rendering, the Routes API (DSS), Firebase FCM for officer notifications and
+location pings, and the Azure-hosted backend.
+
+────────────────────────────────────────────────────────────────────────────────
+1. Dashboard Login & Authentication
+────────────────────────────────────────────────────────────────────────────────
+• Azure MSAL Login: Supervisor signs in via Azure Entra ID (Microsoft identity).
+    ◦ Cost Factor: Azure AD authentication — free for most organizational tenants.
+    ◦ Cost Factor: A short-lived Bearer token is obtained; this token is reused for
+      all backend calls within its lifetime (no repeated logins).
+
+• Initial Data Load (on mount, one-time):
+    ◦ GET /cases          → Cases from last 7 days for the map overlay.
+    ◦ GET /locations      → Last known GPS pings of all field officers.
+    ◦ GET /assignments    → All active/pending/released officer assignments.
+    ◦ Cost Factor: Azure Container Apps compute for each request (3 cold reads on login).
+    ◦ Cost Factor: Azure SQL reads from cases, UserLocations, and assignments tables.
+
+────────────────────────────────────────────────────────────────────────────────
+2. Google Maps — Live Interactive Map (JavaScript SDK)
+────────────────────────────────────────────────────────────────────────────────
+• The dashboard embeds a Google Maps interactive map via the Maps JavaScript API.
+    ◦ The map tile load triggers on every session open and on every pan/zoom.
+    ◦ Cost Factor: Google Maps Platform — Maps JavaScript API charges per map load
+      (≈ $0.007 per load, after the $200/month free credit).
+    ◦ Cost Factor: Each supervisor session = 1 map load. Tile streaming is included.
+
+• Marker Rendering: Live officer GPS pins, case incident markers, and road polylines
+  are drawn client-side using the Google Maps JS SDK — no additional API cost per marker.
+
+• Traffic Layer (optional, toggled by supervisor):
+    ◦ Activating the live traffic tile overlay uses the Maps JavaScript Traffic Layer.
+    ◦ Cost Factor: Included within the Maps JavaScript API load — no separate charge.
+
+────────────────────────────────────────────────────────────────────────────────
+3. Decision Support System (DSS) — Google Routes API
+────────────────────────────────────────────────────────────────────────────────
+• Triggered: When the supervisor opens the "Decision Support" tab or "Officer Allocation"
+  tab for the first time, and then auto-refreshes every 30 minutes while the tab is active.
+
+• Per Refresh Cycle — For Each Monitored Road (currently 10 roads):
+    ◦ 2 Routes API calls are made per road in parallel:
+        - Call 1 (Current Traffic): departure time = now + 2 minutes, TRAFFIC_AWARE_OPTIMAL.
+        - Call 2 (30-min Prediction): departure time = now + 32 minutes, TRAFFIC_AWARE_OPTIMAL.
+    ◦ Both calls include TRAFFIC_ON_POLYLINE extra computation and HIGH_QUALITY polylines.
+    ◦ Cost Factor: Google Routes API — Compute Routes with TRAFFIC_AWARE_OPTIMAL is charged
+      at ≈ $0.01–0.015 per request (Advanced Routes SKU).
+    ◦ Cost Factor: Per full DSS refresh = 10 roads × 2 calls = 20 Routes API calls.
+    ◦ Cost Factor: At 30-minute auto-refresh with an active session = up to 48 refreshes/day
+      = up to 960 Routes API calls per supervisor per day.
+
+• DSS Scoring (Client-Side, No Extra Cost):
+    ◦ Severity score (LOW / MEDIUM / HIGH) is computed locally in the browser using the
+      duration ratio, TRAFFIC_JAM fraction, and SLOW segment fraction from the Routes API response.
+    ◦ Priority score = severity score × road.priority_weight (stored in Azure SQL).
+    ◦ 30-min trend (worsening / stable / clearing) is derived by comparing current vs predicted score.
+    ◦ Cost Factor: All computation is browser-side — zero additional cloud cost.
+
+────────────────────────────────────────────────────────────────────────────────
+4. Officer Allocation — Assignment Creation & FCM Notification
+────────────────────────────────────────────────────────────────────────────────
+• Supervisor clicks "Allocate" → selects a road from the priority pill UI:
+    ◦ POST /assignments → Creates a new assignment row in Azure SQL.
+    ◦ Cost Factor: Azure Container Apps compute for request handling.
+    ◦ Cost Factor: Azure SQL write to the assignments table.
+
+• Immediately after DB insert, the backend queues a Firebase FCM push notification
+  (as a FastAPI BackgroundTask) to the assigned officer's device:
+    ◦ The FCM payload includes: assignment_id, road_name, road_id, severity, type=ASSIGNMENT.
+    ◦ The visible notification body reads: "You have been assigned to [Road]. Traffic is [HIGH/MEDIUM/LOW]."
+    ◦ Cost Factor: Firebase Cloud Messaging is free — no charge per notification.
+    ◦ Cost Factor: Firebase Admin SDK obtains a short-lived Google OAuth2 token from the service
+      account JSON automatically — no manual token management cost.
+    ◦ Cost Factor: Azure Container Apps background thread compute for the FCM HTTP v1 call.
+
+• Officer FCM Token Registration (when app re-opens or token rotates):
+    ◦ POST /assignments/device → Upserts the officer's FCM token in officer_devices table.
+    ◦ Cost Factor: One lightweight Azure SQL write.
+
+────────────────────────────────────────────────────────────────────────────────
+5. Officer Location Refresh — FCM Location Ping (On-Demand)
+────────────────────────────────────────────────────────────────────────────────
+• Supervisor clicks "Ping Officers" button in the Live Officers panel:
+    ◦ POST /officers/request-location → Backend queries all rows in officer_devices.
+    ◦ A silent data-only FCM message (type=LOCATION_REQUEST, android.ttl=0) is sent to
+      each registered device as a BackgroundTask.
+    ◦ The officer's app receives this silently (no visible notification) and immediately
+      posts its current GPS to the separate location backend.
+    ◦ Cost Factor: Firebase Cloud Messaging is free.
+    ◦ Cost Factor: One Azure SQL read (officer_devices table).
+    ◦ Cost Factor: Azure Container Apps compute for the broadcast loop per device.
+    ◦ Cost Factor: ttl=0 means offline devices receive no stale ping — no wasted retries.
+
+• After pinging, supervisor can manually fetch updated locations:
+    ◦ GET /locations → Re-reads UserLocations from Azure SQL.
+    ◦ Cost Factor: Azure SQL read — minimal.
+
+────────────────────────────────────────────────────────────────────────────────
+6. Assignment Status Updates (Officer App → Dashboard)
+────────────────────────────────────────────────────────────────────────────────
+• When an officer responds to an assignment on the mobile app (ACCEPT / REJECT / RELEASE):
+    ◦ PATCH /assignments/{id}/status → Updates status, responded_at, or released_at in Azure SQL.
+    ◦ Cost Factor: Azure Container Apps compute.
+    ◦ Cost Factor: Azure SQL write.
+    ◦ The dashboard supervisor can click "Refresh" to sync the latest status from the backend.
+
+────────────────────────────────────────────────────────────────────────────────
+7. Cases Feed
+────────────────────────────────────────────────────────────────────────────────
+• Cases Tab: Displays all cases from the last 7 days on both the map and the sidebar.
+    ◦ Cost Factor: Azure SQL read (loaded once on login, no polling).
+    ◦ Cost Factor: Azure Container Apps for /cases response.
+
+────────────────────────────────────────────────────────────────────────────────
+Summary of Estimated Cost Profile (Per Supervisor Session / Day)
+────────────────────────────────────────────────────────────────────────────────
+
+Service                         | Cost Level    | Trigger / Volume
+--------------------------------|---------------|-------------------------------------------
+Azure MSAL / Entra ID           | Free          | Once per login session.
+Google Maps JS API              | Low           | 1 map load per supervisor session.
+Google Routes API (DSS)         | Medium–High   | 20 calls/refresh × up to 48 refreshes/day.
+Firebase FCM (Notifications)    | $0.00         | Per assignment + per location ping.
+Firebase FCM (Location Pings)   | $0.00         | On-demand, one per registered officer.
+Azure Container Apps            | Low           | Per API request — short compute bursts.
+Azure SQL Database              | Low–Medium    | Reads/writes for cases, locations, assignments.
+Azure BLOB Storage              | Low           | No direct upload from dashboard (app-side only).
+
+────────────────────────────────────────────────────────────────────────────────
+Cost Optimization Tips for the Dashboard
+────────────────────────────────────────────────────────────────────────────────
+
+1. Routes API — Biggest Variable Cost:
+   • The 30-minute auto-refresh is the dominant cost driver.
+   • If the DSS tab is not actively open, the interval is cleared (tab-aware).
+   • Consider increasing the refresh interval to 45–60 minutes during low-traffic hours.
+   • The FieldMask on Routes API responses requests only the required fields
+     (duration, staticDuration, distanceMeters, speedReadingIntervals, polyline) —
+     this reduces response payload size but does NOT reduce SKU pricing.
+
+2. Routes API — Road Count:
+   • Every additional monitored road = 2 more Routes API calls per refresh.
+   • Curate the monitored_roads table carefully to high-priority corridors only.
+
+3. FCM Location Ping vs Periodic Background Polling:
+   • The on-demand FCM ping replaces the previous fixed 2-minute background location
+     update model, significantly reducing Azure SQL write volume from officers who are
+     idle or off-shift.
+
+4. Google Maps — Single Load:
+   • The Maps JavaScript API is loaded once via index.html script tag.
+   • No additional tile cost from officer markers, polyline overlays, or traffic layer
+     toggles beyond the initial session load.
+
+5. DSS In-Memory State:
+   • DSS results are stored in React state and reused by both the "Decision Support"
+     and "Officer Allocation" tabs — no refetch when switching between these tabs.
+     The allocation panel reads directly from the in-memory dssRoadsData array.
