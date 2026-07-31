@@ -3,10 +3,11 @@ import { useMsal } from "@azure/msal-react";
 import { Navigation, ShieldAlert, FileText, User, Radio, MapPin, AlertCircle, Clock, Eye, EyeOff, Phone, ArrowUpRight, Activity, UserCheck, RefreshCw, Plus, X } from "lucide-react";
 import { mockCases } from "../mockCases";
 import { backendScopes, fetchBackendCasesOnce, type BackendCase } from "../services/backendCases";
+import { backendBaseUrl } from "../authConfig";
 import { acquireBackendAccessToken } from "../services/authToken";
 import { fetchBackendLocations, type BackendLocation } from "../services/backendLocations";
 import { fetchMonitoredRoads, type MonitoredRoad } from "../services/backendRoads";
-import { fetchAssignments, createAssignment, type Assignment } from "../services/backendAssignments";
+import { fetchAssignments, createAssignment, updateAssignmentStatus, type Assignment } from "../services/backendAssignments";
 
 // Access Google Maps from window
 const google = (window as any).google;
@@ -167,6 +168,49 @@ export function AtmsDashboard() {
     }
   };
 
+  // ── Ping officers for live location via FCM ──────────────────────────────
+  const [isPingingOfficers, setIsPingingOfficers] = useState(false);
+  const [pingOfficerResult, setPingOfficerResult] = useState<string | null>(null);
+
+  const handlePingOfficerLocations = async () => {
+    setIsPingingOfficers(true);
+    setPingOfficerResult(null);
+    console.log("📍 [handlePingOfficerLocations] Broadcasting FCM location request to all officer devices...");
+    try {
+      const token = await acquireBackendAccessToken(instance, accounts, backendScopes);
+      if (!token) {
+        setPingOfficerResult("⚠️ Could not get auth token.");
+        return;
+      }
+
+      const res = await fetch(`${backendBaseUrl}/officers/request-location`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        console.error("🚨 [Ping Officers] Failed:", res.status, text);
+        setPingOfficerResult(`❌ Failed (${res.status})`);
+        return;
+      }
+
+      const data = await res.json();
+      console.log("✅ [Ping Officers] Result:", data);
+      setPingOfficerResult(`✅ Pinged ${data.targeted_devices ?? 0} device(s) — GPS updates incoming.`);
+
+      // Auto-clear feedback message after 5s
+      setTimeout(() => setPingOfficerResult(null), 5000);
+    } catch (err) {
+      console.error("💥 [Ping Officers] Error:", err);
+      setPingOfficerResult("❌ Network error — could not reach backend.");
+    } finally {
+      setIsPingingOfficers(false);
+    }
+  };
+
+
+
 
   // DSS State
   const [monitoredRoads, setMonitoredRoads] = useState<MonitoredRoad[]>([]);
@@ -243,26 +287,28 @@ export function AtmsDashboard() {
       const results = await Promise.all(
         roads.map(async (road) => {
           const origin = { lat: road.origin_lat, lng: road.origin_lng };
-          const dest   = { lat: road.destination_lat, lng: road.destination_lng };
+          const dest = { lat: road.destination_lat, lng: road.destination_lng };
           try {
             const [curData, predData] = await Promise.all([
               fetchRoute(origin, dest, 2 * 60 * 1000, apiKey),
               fetchRoute(origin, dest, 32 * 60 * 1000, apiKey),
             ]);
-            const cur  = curData.routes?.[0];
+            const cur = curData.routes?.[0];
             const pred = predData.routes?.[0];
-            const curSeverity  = calculateSeverity(cur?.duration, cur?.staticDuration, cur?.travelAdvisory?.speedReadingIntervals);
+            const curSeverity = calculateSeverity(cur?.duration, cur?.staticDuration, cur?.travelAdvisory?.speedReadingIntervals);
             const predSeverity = calculateSeverity(pred?.duration, pred?.staticDuration, pred?.travelAdvisory?.speedReadingIntervals);
-            const trendDelta   = predSeverity.score - curSeverity.score;
+            const trendDelta = predSeverity.score - curSeverity.score;
             const curPriorityScore = parseFloat((curSeverity.score * road.priority_weight).toFixed(1));
             const predPriorityScore = parseFloat((predSeverity.score * road.priority_weight).toFixed(1));
             const trend = trendDelta >= 10 ? "worsening" : trendDelta <= -10 ? "clearing" : "stable";
             return { road, cur, pred, curSeverity, predSeverity, curPriorityScore, predPriorityScore, trend };
           } catch {
-            return { road, cur: null, pred: null,
+            return {
+              road, cur: null, pred: null,
               curSeverity: { score: 0, label: "LOW" as const },
               predSeverity: { score: 0, label: "LOW" as const },
-              curPriorityScore: 0, predPriorityScore: 0, trend: "stable" as const };
+              curPriorityScore: 0, predPriorityScore: 0, trend: "stable" as const
+            };
           }
         })
       );
@@ -288,7 +334,7 @@ export function AtmsDashboard() {
 
       return () => clearInterval(interval);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapType]);
 
   // Dictionary keyed by officer_id for active/pending assignments
@@ -358,6 +404,10 @@ export function AtmsDashboard() {
 
 
 
+
+
+
+
   // Dynamically sort roads based on current/prediction sub-tab selection
   const sortedDssRoads = useMemo(() => {
     const data = [...dssRoadsData];
@@ -376,7 +426,7 @@ export function AtmsDashboard() {
   // 1. Cases filter: cases from past 7 days based on the latest case date in the dataset
   const past7DaysCases = useMemo(() => {
     if (allCases.length === 0) return [];
-    
+
     // Find the latest case date to use as reference
     const dates = allCases.map(c => new Date(c.created_at).getTime());
     const latestTime = Math.max(...dates);
@@ -468,7 +518,7 @@ export function AtmsDashboard() {
         };
       });
     }
-    
+
     return mockOfficers.map(mo => ({
       id: mo.id,
       name: mo.name,
@@ -608,7 +658,7 @@ export function AtmsDashboard() {
     if (!mapRef.current || !google) return;
 
     const map = mapRef.current;
-    
+
     // Clear existing markers
     markersRef.current.forEach((m) => m.setMap(null));
     markersRef.current = [];
@@ -621,7 +671,7 @@ export function AtmsDashboard() {
           medium: "#f59e0b",
           high: "#ef4444"
         };
-        const color = severityColors[c.severity] || "#3b82f6";
+        const color = severityColors[c.severity] || "#3b82f6"; //we can remove the seviority as we dont have that in the cases inbuilt
 
         const popupContent = `
           <div style="font-family: sans-serif; font-size: 12px; color: #1e293b; padding: 4px;">
@@ -671,8 +721,8 @@ export function AtmsDashboard() {
       activeOfficers.forEach((o) => {
         const color = o.status ? (
           o.status === "Active" ? "#10b981" :
-          o.status === "Patrol" ? "#3b82f6" :
-          o.status === "Break" ? "#64748b" : "#ef4444"
+            o.status === "Patrol" ? "#3b82f6" :
+              o.status === "Break" ? "#64748b" : "#ef4444"
         ) : "#3b82f6";
 
         const formattedTime = new Intl.DateTimeFormat("en-IN", {
@@ -828,10 +878,10 @@ export function AtmsDashboard() {
       const SEV_COLOR: Record<string, string> = { HIGH: "#ef4444", MEDIUM: "#f59e0b", LOW: "#10b981" };
       sortedDssRoads.forEach((item, index) => {
         const origin = { lat: item.road.origin_lat, lng: item.road.origin_lng };
-        const dest   = { lat: item.road.destination_lat, lng: item.road.destination_lng };
+        const dest = { lat: item.road.destination_lat, lng: item.road.destination_lng };
         const encoded = item.cur?.polyline?.encodedPolyline;
-        const path    = encoded ? decodePolyline(encoded) : [origin, dest];
-        const segs    = item.cur?.travelAdvisory?.speedReadingIntervals || [];
+        const path = encoded ? decodePolyline(encoded) : [origin, dest];
+        const segs = item.cur?.travelAdvisory?.speedReadingIntervals || [];
         const isSelected = selectedRoadId === item.road.id;
 
         if (isSelected && encoded && segs.length > 1) {
@@ -904,11 +954,10 @@ export function AtmsDashboard() {
               setMapType("location");
               setSelectedOfficerId(null);
             }}
-            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all ${
-              mapType === "location"
+            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all ${mapType === "location"
                 ? "bg-blue-600 text-white shadow"
                 : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-            }`}
+              }`}
           >
             <Radio className="w-3.5 h-3.5" />
             Live Officers & Reports
@@ -918,11 +967,10 @@ export function AtmsDashboard() {
               setMapType("cases");
               setSelectedOfficerId(null);
             }}
-            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all ${
-              mapType === "cases"
+            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all ${mapType === "cases"
                 ? "bg-blue-600 text-white shadow"
                 : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-            }`}
+              }`}
           >
             <FileText className="w-3.5 h-3.5" />
             Cases (Past 7 Days)
@@ -932,11 +980,10 @@ export function AtmsDashboard() {
               setMapType("dss");
               setSelectedOfficerId(null);
             }}
-            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all ${
-              mapType === "dss"
+            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all ${mapType === "dss"
                 ? "bg-orange-500 text-white shadow"
                 : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-            }`}
+              }`}
           >
             <Activity className="w-3.5 h-3.5" />
             Decision Support
@@ -946,11 +993,10 @@ export function AtmsDashboard() {
               setMapType("allocation");
               setSelectedOfficerId(null);
             }}
-            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all ${
-              mapType === "allocation"
+            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all ${mapType === "allocation"
                 ? "bg-violet-600 text-white shadow"
                 : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-            }`}
+              }`}
           >
             <UserCheck className="w-3.5 h-3.5" />
             Officer Allocation
@@ -958,11 +1004,10 @@ export function AtmsDashboard() {
           <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1 self-center" />
           <button
             onClick={() => setShowPOIs(!showPOIs)}
-            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all ${
-              showPOIs
+            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all ${showPOIs
                 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400"
                 : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-            }`}
+              }`}
             title={showPOIs ? "Hide Map Details" : "Show Map Details"}
           >
             {showPOIs ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
@@ -998,8 +1043,29 @@ export function AtmsDashboard() {
         <div className="flex-1 flex flex-col min-h-0 bg-white/60 dark:bg-[#0A1222]/60 border border-slate-200 dark:border-indigo-500/10 rounded-2xl p-5 shadow-lg backdrop-blur-md">
           {mapType === "location" ? (
             <div className="flex flex-col h-full min-h-0">
-              <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4">Active Field Officers</h3>
-              
+              <div className="flex items-center justify-between mb-4 shrink-0">
+                <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Active Field Officers</h3>
+                <button
+                  id="ping-officers-btn"
+                  onClick={() => void handlePingOfficerLocations()}
+                  disabled={isPingingOfficers}
+                  className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-semibold rounded-lg bg-indigo-100 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/25 hover:bg-indigo-200 dark:hover:bg-indigo-500/25 disabled:opacity-50 transition-colors"
+                  title="Send silent FCM ping to all officer devices to update their GPS locations"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isPingingOfficers ? "animate-spin" : ""}`} />
+                  {isPingingOfficers ? "Pinging…" : "Ping Officers"}
+                </button>
+              </div>
+
+              {pingOfficerResult && (
+                <div className={`mb-3 shrink-0 px-3 py-2 rounded-xl text-[10px] font-semibold flex items-center gap-2 border ${pingOfficerResult.startsWith("✅")
+                    ? "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/25 text-emerald-700 dark:text-emerald-300"
+                    : "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/25 text-red-700 dark:text-red-300"
+                  }`}>
+                  {pingOfficerResult}
+                </div>
+              )}
+
               <div className="flex-1 overflow-y-auto space-y-3 pr-1">
                 {activeOfficers.map((o) => {
                   const statusColors: Record<string, string> = {
@@ -1018,11 +1084,10 @@ export function AtmsDashboard() {
                     <div
                       key={o.id}
                       onClick={() => handleOfficerClick(o)}
-                      className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col gap-2 ${
-                        selectedOfficerId === o.id
+                      className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col gap-2 ${selectedOfficerId === o.id
                           ? "bg-blue-50 border-blue-200 dark:bg-blue-500/10 dark:border-blue-500/30"
                           : "bg-slate-50/50 hover:bg-slate-50 border-transparent dark:bg-[#111C30]/50 dark:hover:bg-[#111C30]"
-                      }`}
+                        }`}
                     >
                       <div className="flex justify-between items-center">
                         <div className="flex items-center gap-2">
@@ -1033,7 +1098,7 @@ export function AtmsDashboard() {
                           {o.badge ? `#${o.badge}` : `#${o.id.substring(0, 6)}`}
                         </span>
                       </div>
-                      
+
                       {o.vehicle ? (
                         <div className="grid grid-cols-2 gap-2 text-xs text-slate-500 dark:text-slate-400">
                           <div>Vehicle: <span className="font-semibold text-slate-700 dark:text-slate-300">{o.vehicle}</span></div>
@@ -1087,7 +1152,7 @@ export function AtmsDashboard() {
                 ) : (
                   past7DaysCases.map((c) => (
                     <div key={c.id}
-                      onClick={() => { if (mapRef.current) { mapRef.current.panTo({ lat: c.latitude, lng: c.longitude }); mapRef.current.setZoom(15); }}}
+                      onClick={() => { if (mapRef.current) { mapRef.current.panTo({ lat: c.latitude, lng: c.longitude }); mapRef.current.setZoom(15); } }}
                       className="p-3 rounded-xl bg-slate-50/50 hover:bg-slate-50 border border-transparent hover:border-slate-200 dark:bg-[#111C30]/50 dark:hover:bg-[#111C30] cursor-pointer transition-all flex flex-col gap-1.5">
                       <div className="flex justify-between items-start">
                         <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">{c.reason}</span>
@@ -1146,7 +1211,7 @@ export function AtmsDashboard() {
               ) : sortedDssRoads.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-2 text-slate-400">
                   <UserCheck className="w-8 h-8 opacity-30" />
-                  <span className="text-xs text-center">No traffic data yet.<br/>Switch to Decision Support tab to load roads.</span>
+                  <span className="text-xs text-center">No traffic data yet.<br />Switch to Decision Support tab to load roads.</span>
                 </div>
               ) : (
                 <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
@@ -1182,19 +1247,17 @@ export function AtmsDashboard() {
                             <div key={o.id} className="p-2 rounded-lg bg-white/80 dark:bg-[#0A1222]/80 border border-violet-100 dark:border-violet-900/30 flex flex-col gap-1.5 transition-all">
                               <div className="flex items-center gap-2">
                                 {/* Dot is GREEN when officer is available or active */}
-                                <div className={`w-2 h-2 rounded-full shrink-0 ${
-                                  assigned
+                                <div className={`w-2 h-2 rounded-full shrink-0 ${assigned
                                     ? (assigned.status === "ACTIVE" ? "bg-emerald-500" : assigned.status === "REJECTED" ? "bg-red-500" : "bg-amber-400")
                                     : "bg-emerald-500"
-                                }`} />
+                                  }`} />
                                 <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate flex-1">{o.name}</span>
 
                                 {assigned ? (
-                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                                    assigned.status === "ACTIVE" ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400"
-                                    : assigned.status === "PENDING" ? "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
-                                    : "bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400"
-                                  }`}>
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${assigned.status === "ACTIVE" ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400"
+                                      : assigned.status === "PENDING" ? "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
+                                        : "bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400"
+                                    }`}>
                                     {assigned.status === "ACTIVE" ? `✓ ${assigned.road_name}` : assigned.status === "PENDING" ? `⏳ ${assigned.road_name}` : `❌ Rejected`}
                                   </span>
                                 ) : (
@@ -1204,11 +1267,10 @@ export function AtmsDashboard() {
                                     </span>
                                     <button
                                       onClick={() => setSelectedOfficerForAllocate(isAllocatingThisOfficer ? null : o.id)}
-                                      className={`text-[9px] font-bold px-2 py-0.5 rounded-full transition-all flex items-center gap-1 shrink-0 ${
-                                        isAllocatingThisOfficer
+                                      className={`text-[9px] font-bold px-2 py-0.5 rounded-full transition-all flex items-center gap-1 shrink-0 ${isAllocatingThisOfficer
                                           ? "bg-violet-600 text-white"
                                           : "bg-violet-100 hover:bg-violet-200 dark:bg-violet-500/20 text-violet-700 dark:text-violet-300"
-                                      }`}
+                                        }`}
                                     >
                                       <Plus className="w-2.5 h-2.5" />
                                       {isAllocatingThisOfficer ? "Close" : "Allocate"}
@@ -1226,8 +1288,8 @@ export function AtmsDashboard() {
                                       const sevBadge = item.curSeverity.label === "HIGH"
                                         ? "bg-red-500 text-white"
                                         : item.curSeverity.label === "MEDIUM"
-                                        ? "bg-amber-500 text-white"
-                                        : "bg-emerald-500 text-white";
+                                          ? "bg-amber-500 text-white"
+                                          : "bg-emerald-500 text-white";
                                       return (
                                         <button
                                           key={item.road.id}
@@ -1257,12 +1319,12 @@ export function AtmsDashboard() {
                   {sortedDssRoads.map((item, rank) => {
                     const sevColor = item.curSeverity.label === "HIGH" ? "text-red-600 dark:text-red-400"
                       : item.curSeverity.label === "MEDIUM" ? "text-amber-600 dark:text-amber-400"
-                      : "text-emerald-600 dark:text-emerald-400";
+                        : "text-emerald-600 dark:text-emerald-400";
                     const sevBadge = item.curSeverity.label === "HIGH"
                       ? "bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/25"
                       : item.curSeverity.label === "MEDIUM"
-                      ? "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/25"
-                      : "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/25";
+                        ? "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/25"
+                        : "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/25";
 
                     // Officers already assigned to THIS road
                     const assignedToRoad = assignments.filter(
@@ -1286,7 +1348,7 @@ export function AtmsDashboard() {
                             </div>
                             <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-500 dark:text-slate-400">
                               <span className={`font-semibold ${sevColor}`}>Score: {item.curPriorityScore}</span>
-                              <span>Delay: {item.cur ? (() => { const d = Math.max(0, parseInt(item.cur.duration) - parseInt(item.cur.staticDuration)); return d > 10 ? `+${Math.round(d/60)}m` : "None"; })() : "—"}</span>
+                              <span>Delay: {item.cur ? (() => { const d = Math.max(0, parseInt(item.cur.duration) - parseInt(item.cur.staticDuration)); return d > 10 ? `+${Math.round(d / 60)}m` : "None"; })() : "—"}</span>
                               <span className={item.trend === "worsening" ? "text-red-500" : item.trend === "clearing" ? "text-emerald-500" : "text-amber-500"}>
                                 {item.trend === "worsening" ? "▲" : item.trend === "clearing" ? "▼" : "→"} {item.trend}
                               </span>
@@ -1298,10 +1360,9 @@ export function AtmsDashboard() {
                         {assignedToRoad.length > 0 && (
                           <div className="px-3 pb-2 flex flex-wrap gap-1">
                             {assignedToRoad.map((a) => (
-                              <span key={a.id} className={`text-[9px] font-semibold px-2 py-0.5 rounded-full ${
-                                a.status === "ACTIVE" ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400"
-                                : "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
-                              }`}>
+                              <span key={a.id} className={`text-[9px] font-semibold px-2 py-0.5 rounded-full ${a.status === "ACTIVE" ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400"
+                                  : "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
+                                }`}>
                                 {a.status === "ACTIVE" ? "✓" : "⏳"} {a.officer_name}
                               </span>
                             ))}
@@ -1355,21 +1416,19 @@ export function AtmsDashboard() {
               <div className="flex bg-slate-100 dark:bg-[#111C30] p-1 rounded-xl mb-4 border border-slate-200/50 dark:border-indigo-500/10 shrink-0">
                 <button
                   onClick={() => setDssSubTab("current")}
-                  className={`flex-1 py-1.5 text-center text-xs font-semibold rounded-lg transition-all ${
-                    dssSubTab === "current"
+                  className={`flex-1 py-1.5 text-center text-xs font-semibold rounded-lg transition-all ${dssSubTab === "current"
                       ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow"
                       : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
-                  }`}
+                    }`}
                 >
                   Current Traffic
                 </button>
                 <button
                   onClick={() => setDssSubTab("predicted")}
-                  className={`flex-1 py-1.5 text-center text-xs font-semibold rounded-lg transition-all ${
-                    dssSubTab === "predicted"
+                  className={`flex-1 py-1.5 text-center text-xs font-semibold rounded-lg transition-all ${dssSubTab === "predicted"
                       ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow"
                       : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
-                  }`}
+                    }`}
                 >
                   30-Min Prediction
                 </button>
@@ -1415,16 +1474,16 @@ export function AtmsDashboard() {
                     // Current Tab values
                     const curSev = item.curSeverity.label;
                     const curSevBg = curSev === "HIGH" ? "bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/25"
-                                  : curSev === "MEDIUM" ? "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/25"
-                                  : "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/25";
+                      : curSev === "MEDIUM" ? "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/25"
+                        : "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/25";
                     const curDelaySec = item.cur ? Math.max(0, parseInt(item.cur.duration) - parseInt(item.cur.staticDuration)) : 0;
                     const curDelayMin = curDelaySec > 10 ? `+${Math.round(curDelaySec / 60)} min` : "None";
 
                     // Predicted Tab values
                     const predSev = item.predSeverity.label;
                     const predSevBg = predSev === "HIGH" ? "bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/25"
-                                  : predSev === "MEDIUM" ? "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/25"
-                                  : "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/25";
+                      : predSev === "MEDIUM" ? "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/25"
+                        : "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/25";
                     const predDelaySec = item.pred ? Math.max(0, parseInt(item.pred.duration) - parseInt(item.pred.staticDuration)) : 0;
                     const predDelayMin = predDelaySec > 10 ? `+${Math.round(predDelaySec / 60)} min` : "None";
 
@@ -1437,11 +1496,11 @@ export function AtmsDashboard() {
                     const actionBg = activeSev === "HIGH" || (activeSev === "MEDIUM" && item.trend === "worsening")
                       ? "bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400"
                       : activeSev === "MEDIUM" ? "bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400"
-                      : "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+                        : "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
                     const actionText = activeSev === "HIGH" || (activeSev === "MEDIUM" && item.trend === "worsening")
                       ? `🚨 Deploy officer — high congestion${item.trend === "worsening" ? ", worsening" : ""}`
                       : activeSev === "MEDIUM" ? "👁 Monitor — moderate traffic"
-                      : "✅ Clear — no action needed";
+                        : "✅ Clear — no action needed";
 
                     return (
                       <div key={item.road.id}
@@ -1449,11 +1508,10 @@ export function AtmsDashboard() {
                           setSelectedRoadId(item.road.id);
                           if (mapRef.current) { mapRef.current.panTo({ lat: item.road.origin_lat, lng: item.road.origin_lng }); mapRef.current.setZoom(14); }
                         }}
-                        className={`p-3 rounded-xl border cursor-pointer transition-all ${
-                          isSelected
+                        className={`p-3 rounded-xl border cursor-pointer transition-all ${isSelected
                             ? "bg-orange-50 dark:bg-orange-500/10 border-orange-300 dark:border-orange-500/30 shadow-sm"
                             : "bg-slate-50/50 dark:bg-[#111C30]/50 border-transparent hover:border-slate-200 dark:hover:border-indigo-500/20"
-                        }`}
+                          }`}
                       >
                         {/* Header row */}
                         <div className="flex items-start justify-between gap-2 mb-2">
